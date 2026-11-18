@@ -37,10 +37,11 @@ func (o options) validate() error {
 }
 
 type update struct {
-	dir  string
-	p    progress
-	done bool
-	err  error
+	state string
+	dir   string
+	p     progress
+	done  bool
+	err   error
 }
 
 func export(ctx context.Context, c *client, o options, report func(update)) (string, error) {
@@ -80,40 +81,74 @@ func export(ctx context.Context, c *client, o options, report func(update)) (str
 	if err = writeJSON(dir, "manifest.json", object{"version": 1, "session": s.cfg, "state": "running"}); err != nil {
 		return dir, err
 	}
-	err = collect(ctx, c, s, idx, func(p progress) { report(update{dir: dir, p: p}) })
+	var last progress
+	err = collect(ctx, c, s, idx, func(p progress) { last = p; report(update{dir: dir, p: p}) })
 	state := "finished"
+	for _, r := range idx.results {
+		if r.Status != "complete" {
+			state = "finished_with_gaps"
+			break
+		}
+	}
 	if err != nil {
 		state = "interrupted"
 	}
-	report(update{dir: dir, p: progress{Path: "Запись JSON и JSONL", Records: idx.count}})
-	return dir, errors.Join(err, s.publish(idx, state, err))
+	last.query = query{Path: "publish"}
+	last.Records = idx.count
+	last.Total = len(idx.entities)
+	if err == nil {
+		last.Done = last.Total
+	}
+	report(update{dir: dir, p: last})
+	saveErr := s.publish(idx, state, err)
+	if saveErr != nil {
+		state = "save_error"
+	}
+	report(update{dir: dir, p: last, state: state})
+	return dir, errors.Join(err, saveErr)
 }
 
 type ui struct {
-	o       options
-	field   int
-	running bool
-	note    string
-	latest  update
-	events  chan update
-	cancel  context.CancelFunc
-	c       *client
-	ctx     context.Context
+	width, height, scroll int
+	colors                palette
+	o                     options
+	field                 int
+	running               bool
+	note                  string
+	latest                update
+	events                chan update
+	cancel                context.CancelFunc
+	c                     *client
+	ctx                   context.Context
 }
 
 func (m *ui) Init() tea.Cmd   { return nil }
 func (m *ui) listen() tea.Msg { return <-m.events }
 func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch x := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = x.Width, x.Height
+		return m, nil
 	case update:
-		if x.done {
-			m.latest.dir = x.dir
-			m.latest.err = x.err
-			return m, tea.Quit
-		}
 		m.latest = x
+		if x.done {
+			m.running = false
+			m.note = ""
+			return m, nil
+		}
 		return m, m.listen
 	case tea.KeyPressMsg:
+		if m.latest.done {
+			switch x.String() {
+			case "enter", "esc", "ctrl+c":
+				return m, tea.Quit
+			case "up":
+				m.scroll = max(0, m.scroll-1)
+			case "down":
+				m.scroll = min(m.scroll+1, max(0, len(m.resultLines(m.contentWidth()))-max(0, m.height-3)))
+			}
+			return m, nil
+		}
 		switch x.String() {
 		case "esc", "ctrl+c":
 			if m.running {
@@ -129,16 +164,27 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		fields := []*string{&m.o.user, &m.o.from, &m.o.to}
 		switch x.String() {
 		case "up", "shift+tab":
+			m.note = ""
 			m.field = (m.field + 2) % 3
 		case "down", "tab":
+			m.note = ""
 			m.field = (m.field + 1) % 3
 		case "enter":
 			if m.field < 2 {
+				m.note = ""
 				m.field++
 				return m, nil
 			}
 			if err := m.o.validate(); err != nil {
 				m.note = err.Error()
+				switch {
+				case !safeSegment(m.o.user):
+					m.field = 0
+				case !validDate(m.o.from):
+					m.field = 1
+				default:
+					m.field = 2
+				}
 				return m, nil
 			}
 			ctx, cancel := context.WithCancel(m.ctx)
@@ -147,31 +193,40 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.note = ""
 			c, o, ch := m.c, m.o, m.events
 			return m, tea.Batch(m.listen, func() tea.Msg {
+				var final update
 				dir, err := export(ctx, c, o, func(u update) {
+					final = u
 					select {
 					case ch <- u:
 					default:
 					}
 				})
-				ch <- update{dir: dir, done: true, err: err}
+				final.dir, final.done, final.err = dir, true, err
+				ch <- final
 				return nil
 			})
 		case "backspace":
+			m.note = ""
 			r := []rune(*fields[m.field])
 			if len(r) > 0 {
 				*fields[m.field] = string(r[:len(r)-1])
 			}
 		default:
-			*fields[m.field] += cleanText(x.Text)
+			if x.Text != "" {
+				m.note = ""
+				*fields[m.field] += cleanText(x.Text)
+			}
 		}
 	case tea.PasteMsg:
-		if !m.running {
+		if !m.running && !m.latest.done {
+			m.note = ""
 			fields := []*string{&m.o.user, &m.o.from, &m.o.to}
 			*fields[m.field] += cleanText(x.Content)
 		}
 	}
 	return m, nil
 }
+func validDate(s string) bool { _, err := time.Parse(time.DateOnly, s); return err == nil }
 func cleanText(s string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
@@ -179,24 +234,6 @@ func cleanText(s string) string {
 		}
 		return r
 	}, s)
-}
-func (m *ui) View() tea.View {
-	var b strings.Builder
-	b.WriteString("stats.fm  ·  Экспорт музыкальной статистики\n\n")
-	if !m.running {
-		for i, x := range []string{"Username  " + m.o.user, "С даты    " + m.o.from, "По дату   " + m.o.to} {
-			mark := "  "
-			if i == m.field {
-				mark = "› "
-			}
-			fmt.Fprintln(&b, mark+x)
-		}
-		b.WriteString("\nДаты необязательны · YYYY-MM-DD (UTC)\nEnter — дальше или начать · Tab — выбрать поле · Esc — выход\n")
-	} else {
-		fmt.Fprintf(&b, "%s\nЗаписей: %d · Объектов: %d/%d\n%s\nEsc — остановить и сохранить\n", m.latest.p.Path, m.latest.p.Records, m.latest.p.Done, m.latest.p.Total, m.latest.dir)
-	}
-	b.WriteString(m.note)
-	return tea.NewView(b.String())
 }
 func run() error {
 	var o options
@@ -223,7 +260,7 @@ func run() error {
 			}
 		})
 	} else {
-		m := &ui{o: o, c: c, ctx: ctx, events: make(chan update, 1)}
+		m := &ui{colors: loadPalette(ctx), o: o, c: c, ctx: ctx, events: make(chan update, 1)}
 		_, err = tea.NewProgram(m).Run()
 		if m.cancel != nil {
 			m.cancel()

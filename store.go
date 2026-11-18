@@ -252,9 +252,6 @@ func (s *store) publish(idx *index, state string, reason error) error {
 	slices.SortFunc(rankings, func(a, b *summaryGroup) int { return cmp(a.Query, b.Query) })
 	slices.SortFunc(results, func(a, b *result) int { return cmp(a.Query, b.Query) })
 	ended := time.Now().UTC()
-	if state == "finished" && (coverage["partial"] > 0 || coverage["failed"] > 0 || coverage["private"] > 0 || coverage["unavailable"] > 0) {
-		state = "finished_with_gaps"
-	}
 	if err := writeJSON(s.dir, "summary.json", object{"profile": s.cfg.Profile, "started_at": s.cfg.Started, "exported_at": ended, "periods": s.cfg.Periods, "from": s.cfg.From, "to": s.cfg.To, "state": state, "coverage": coverage, "totals": totals, "rankings": rankings}); err != nil {
 		return err
 	}

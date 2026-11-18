@@ -230,7 +230,7 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 }
 
 type progress struct {
-	Path                 string
+	query
 	Records, Done, Total int
 }
 
@@ -247,7 +247,7 @@ func collect(ctx context.Context, c *client, s *store, idx *index, notify func(p
 				} else if r.Status != "running" {
 					break
 				}
-				notify(progress{q.Path, idx.count, done, len(idx.entities)})
+				notify(progress{q, idx.count, done, len(idx.entities)})
 				p, err := c.fetch(ctx, s.cfg, q, r)
 				if err != nil {
 					return fmt.Errorf("%s: %w", q.Path, err)
