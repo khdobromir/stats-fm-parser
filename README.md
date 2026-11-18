@@ -1,69 +1,37 @@
 # stats-fm-parser
 
-Локальный экспортёр публичной музыкальной статистики stats.fm. Принимает username, разрешает его в ID профиля и сохраняет сводку для языковой модели и подробные данные в JSON Lines. Работает на Linux с Go 1.25 или новее.
+Export public stats.fm listening data and Spotify Liked Songs to JSON and JSONL. Requires Linux and Go 1.25+.
 
-## Запуск
+## Run
 
 ```bash
 go run .
 ```
 
-Полноэкранный пульт при запуске берёт акцентные цвета из текущей темы Omarchy. На других системах используется палитра терминала. Введите username и нажмите Enter. В поле «Период» используйте ← и → для выбора. Доступны все стандартные периоды, последняя неделя, последние 4 недели, последние 6 календарных месяцев, текущий год с 1 января и свои даты. При выборе «Свои даты» два поля задают интервал в UTC, включая обе даты. Enter в последнем поле запускает экспорт. Во время экспорта видны текущая операция, число записей и размер очереди. Для остановки с сохранением нажмите Esc. Итоговый экран показывает каталог выгрузки и команду продолжения при прерывании. Нажмите Enter или Esc, чтобы вернуться в оболочку.
+Enter a stats.fm username, choose a period with ← and →, then press Enter. Press Esc to stop and save a partial export. On Omarchy, the terminal UI uses the active theme.
 
-Для запуска из скрипта используйте тот же экспортёр с аргументами.
+Press F2 to switch to Spotify. Enter the path to a Spotify Account data ZIP or its extracted `YourLibrary.json` (up to 64 MiB). The export reads your library snapshot locally. [Request your Spotify data](https://www.spotify.com/account/privacy/).
 
-```bash
-go run . -user USERNAME -period week -out exports
-go run . -user USERNAME -period custom -from 2025-01-01 -to 2025-12-31
-go run . -resume exports/ИМЯ_КАТАЛОГА
-```
-
-Для `-period` доступны `week`, `weeks`, `months`, `ytd` и `custom`. Без флага пакетный запуск выгружает все стандартные периоды, а пара `-from` и `-to` добавляет к ним пользовательский диапазон.
-
-Каждый новый экспорт создаёт отдельный каталог. В пакетном режиме Ctrl+C останавливает запросы и сохраняет частичный результат. Параметр `-resume` восстанавливает очередь из журнала и продолжает с первой незавершённой страницы. Укажите каталог, напечатанный программой. Для свежего снимка профиля снова используйте `-user`.
-
-## Любимые треки из Spotify
-
-Запросите пакет [Account data в настройках конфиденциальности Spotify](https://www.spotify.com/account/privacy/). В полноэкранной форме нажмите `F2`, вставьте путь к ZIP или распакованному `YourLibrary.json` и нажмите `Enter`. Для пакетного запуска используйте ту же команду с флагом:
+## Command line
 
 ```bash
-go run . -spotify-library "/путь к/Spotify Account Data.zip" -out exports
+go run . -user USERNAME -period week
+go run . -user USERNAME -period custom -from 2026-01-01 -to 2026-01-31
+go run . -resume "exports/SESSION"
+go run . -spotify-library "Spotify Account Data.zip"
 ```
 
-Программа читает архив локально и создаёт `spotify_liked_tracks.jsonl` в отдельном каталоге выгрузки. Каждая строка содержит `title`, `artist`, `album` и `uri`. Список отражает библиотеку на момент подготовки архива. Порядок и повторы сохраняются, отсутствующие значения записываются как `null`. Поддерживаются файлы `YourLibrary.json` размером до 64 МиБ, в том числе внутри ZIP.
+Periods are `week`, `weeks` (4 weeks), `months` (6 months), `ytd` (since January 1), and `custom` (inclusive UTC dates). Omit `-period` for all standard stats.fm periods, including available recaps and platform rankings. Use `-out DIR` to change the default `exports/` directory. In batch mode, Ctrl+C stops a stats.fm export and saves its progress.
 
-## Данные для анализа
+## Output
 
-| Файл | Содержимое |
-|---|---|
-| `summary.json` | Профиль, периоды, общие показатели, статусы и первые 20 позиций каждого общего рейтинга с названиями. Начните анализ с этого файла. |
-| `rankings.jsonl` | Все полученные позиции общих и вложенных топов. `requested_order` различает число прослушиваний, время и алгоритм платформы. |
-| `streams.jsonl` | История, недавние и текущие прослушивания, выборки по треку, исполнителю и альбому. Для подсчёта отдельных прослушиваний выберите строки с `method == "streams"`. Одно событие может также входить в выборки по объектам. |
-| `statistics.jsonl` | Общие показатели, распределения, дневные значения по пользователю и отдельным объектам, рекорды исполнителей. |
-| `recaps.jsonl` | Отчёты, которые вернули методы weekly, monthly, seasonal, yearly, artist и time-capsule. |
-| `manifest.json` | Версия формата, время сбора, число строк и результат каждого запроса с причиной пропуска или ограничения. |
+| File | Contents |
+| --- | --- |
+| `summary.json` | stats.fm totals and the first 20 entries in each main ranking |
+| `rankings.jsonl`, `streams.jsonl`, `statistics.jsonl`, `recaps.jsonl` | Detailed stats.fm results |
+| `manifest.json` | Counts and coverage, including unavailable or partial results |
+| `spotify_liked_tracks.jsonl` | Spotify track titles, artists, albums, and URIs in archive order |
 
-Каждая строка JSONL содержит тип, ID пользователя, метод, время получения в UTC и данные API в `data`. Для рейтингов и агрегатов указан запрошенный период. Для пользовательского периода сохраняются обе даты. `playedMs` и `played_ms` измеряются в миллисекундах. Неизвестный счётчик в рейтинге представлен значением `null`, известный ноль — числом `0`.
+Each export gets its own directory. Keep `session.json` and `pages.jsonl` to resume a stats.fm export. For an individual listening history, select rows with `method == "streams"` in `streams.jsonl` to avoid counting track, artist, and album views of the same play.
 
-Например, получить все позиции общего топа треков за четыре недели по числу прослушиваний можно одной командой в каталоге экспорта.
-
-```bash
-jq -c 'select(.method == "top/tracks" and .period == "weeks" and .requested_order == "COUNT") | .data' rankings.jsonl
-```
-
-## Полнота выгрузки
-
-При выборе одного периода программа фиксирует границы UTC в `session.json` и использует их при продолжении выгрузки. В этом режиме экспортируются топы по числу и длительности прослушиваний, статистика и история в выбранном диапазоне. Для ретроспектив и рейтингов платформы выберите «Все стандартные».
-
-В режиме «Все стандартные» программа запрашивает пресеты `today`, `days`, `weeks`, `months`, `lifetime` и заданный вручную интервал. Для платформенных рейтингов используются стандартные длинные периоды. Реальный охват зависит от доступности раздела, настроек профиля, подписки и импорта истории. В частности, для бесплатного профиля самый длинный платформенный рейтинг может охватывать последний год. Относительные периоды вычисляет сервер на момент запроса. Поле `fetched_at` позволяет учитывать перерывы между страницами. [Справка stats.fm](https://support-new.stats.fm/hc/en-us/articles/59061649002265-Top-tracks-artists-and-albums)
-
-У записей в `manifest.json` статус `complete` с `count: 0` означает пустой ответ. `private` обозначает HTTP 401/403, `unavailable` — отклонённый запрос, `partial` — проблему формата, лимит или остановку пагинации, `failed` — ошибку сервера после повторов. Если хотя бы один раздел имеет такой статус, итоговое состояние — `finished_with_gaps`. При остановке посреди сбора состояние — `interrupted`.
-
-На больших профилях детализация по каждому найденному объекту может занимать тысячи запросов. Методы вызываются последовательно, с учётом `Retry-After`. Общая история выгружается до времени начала экспорта. Программа сохраняет каждую страницу в `pages.jsonl`. Для возобновления сохраните этот журнал и `session.json`. При завершении или штатной остановке из журнала формируются итоговые файлы, поэтому на диске должно хватать места и на журнал, и на результат. [Swagger stats.fm](https://api-v2.stats.fm/swagger)
-
-## Проверка
-
-```bash
-go test -race ./...
-go vet ./...
-```
+Run checks with `go test -race ./...` and `go vet ./...`.
