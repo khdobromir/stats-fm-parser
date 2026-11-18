@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"stats-fm-parser/internal/statsfm"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -37,12 +39,12 @@ func TestPalette(t *testing.T) {
 }
 
 func TestConsoleLayout(t *testing.T) {
-	m := ui{colors: terminalPalette(), o: options{user: strings.Repeat("音", 100)}}
+	m := ui{colors: terminalPalette(), o: options{Options: statsfm.Options{User: strings.Repeat("音", 100)}}}
 	for _, size := range []tea.WindowSizeMsg{{Width: 120, Height: 36}, {Width: 80, Height: 24}, {Width: 40, Height: 15}, {Width: 15, Height: 7}} {
 		m.Update(size)
 		for _, stage := range []string{"form", "running", "done"} {
 			m.running = stage == "running"
-			m.latest = update{done: stage == "done", state: "interrupted", dir: strings.Repeat("длинный каталог/", 25), p: progress{query: query{"top/tracks", "weeks", "COUNT"}, Records: 78, Total: 17}}
+			m.latest = update{done: stage == "done", Update: statsfm.Update{State: "interrupted", Dir: strings.Repeat("длинный каталог/", 25), Progress: statsfm.Progress{Path: "top/tracks", Period: "weeks", Order: "COUNT", Records: 78, Total: 17}}}
 			v := m.View()
 			lines := strings.Split(v.Content, "\n")
 			if !v.AltScreen || len(lines) != size.Height {
@@ -71,7 +73,7 @@ func TestResultRemainsUntilExit(t *testing.T) {
 		{"finished", "Экспорт завершён", nil}, {"finished_with_gaps", "с пропусками", nil},
 		{"interrupted", "-resume", context.Canceled}, {"save_error", "disk full", errors.Join(context.Canceled, errors.New("disk full"))}, {"", "bad profile", errors.New("bad profile")},
 	} {
-		_, cmd := m.Update(update{done: true, state: tc.state, dir: "/tmp/test", err: tc.err, p: progress{Records: 321}})
+		_, cmd := m.Update(update{done: true, err: tc.err, Update: statsfm.Update{State: tc.state, Dir: "/tmp/test", Progress: statsfm.Progress{Records: 321}}})
 		lines := strings.Join(m.resultLines(80), "\n")
 		if cmd != nil || m.running || !strings.Contains(lines, tc.label) {
 			t.Fatal(lines)
@@ -98,7 +100,32 @@ func TestChoosePeriod(t *testing.T) {
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.Update(tea.PasteMsg{Content: "2026-01-01"})
-	if m.o.from != "2026-01-01" {
+	if m.o.From != "2026-01-01" {
 		t.Fatal("Enter on custom period should focus the start date")
+	}
+}
+
+func TestDatesAndInput(t *testing.T) {
+	m := ui{}
+	m.Update(tea.PasteMsg{Content: "volt\n"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.o.User != "volt" || m.field != 1 {
+		t.Fatal(m.o, m.field)
+	}
+}
+func TestSpotifyForm(t *testing.T) {
+	m := ui{width: 40, height: 15}
+	m.Update(tea.PasteMsg{Content: "volt"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
+	if view := m.View().Content; !strings.Contains(view, "Любимые треки") || !strings.Contains(view, "Путь") {
+		t.Fatal(view)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if view := m.View().Content; m.running || !strings.Contains(view, "Укажите путь") {
+		t.Fatal(view)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
+	if m.o.User != "volt" || !strings.Contains(m.View().Content, "Пользователь") {
+		t.Fatal("draft lost when switching sources")
 	}
 }

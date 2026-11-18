@@ -1,37 +1,28 @@
-package main
+package statsfm
 
 import "time"
 
-const customPeriod = "custom"
-
-var periodChoices = [...]struct{ key, label string }{
-	{"", "Все стандартные"},
-	{"week", "За неделю"},
-	{"weeks", "За 4 недели"},
-	{"months", "За 6 месяцев"},
-	{"ytd", "За текущий год"},
-	{customPeriod, "Свои даты"},
-}
+const CustomPeriod = "custom"
 
 type dateWindow struct {
 	After  int64 `json:"after"`
 	Before int64 `json:"before"`
 }
 
-func (o options) exportConfig(p profile, started time.Time) config {
-	cfg := config{Profile: p, Started: started.UTC(), From: o.from, To: o.to}
-	if o.period == "" {
+func (o Options) exportConfig(p profile, started time.Time) config {
+	cfg := config{Profile: p, Started: started.UTC(), From: o.From, To: o.To}
+	if o.Period == "" {
 		cfg.Periods = []string{"today", "days", "weeks", "months", "lifetime"}
-		if o.from != "" {
-			cfg.Periods = append(cfg.Periods, customPeriod)
+		if o.From != "" {
+			cfg.Periods = append(cfg.Periods, CustomPeriod)
 		}
 		return cfg
 	}
 
-	cfg.Periods = []string{o.period}
+	cfg.Periods = []string{o.Period}
 	end := cfg.Started
 	var start time.Time
-	switch o.period {
+	switch o.Period {
 	case "week":
 		start = end.AddDate(0, 0, -7)
 	case "weeks":
@@ -42,8 +33,8 @@ func (o options) exportConfig(p profile, started time.Time) config {
 		start = month.AddDate(0, 0, min(end.Day(), lastDay)-1)
 	case "ytd":
 		start = time.Date(end.Year(), time.January, 1, 0, 0, 0, 0, time.UTC)
-	case customPeriod:
-		start, end, _ = dateBounds(o.from, o.to)
+	case CustomPeriod:
+		start, end, _ = dateBounds(o.From, o.To)
 	}
 	cfg.Window = &dateWindow{After: start.UnixMilli(), Before: end.UnixMilli()}
 	return cfg

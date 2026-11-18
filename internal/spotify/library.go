@@ -1,4 +1,4 @@
-package main
+package spotify
 
 import (
 	"archive/zip"
@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"stats-fm-parser/internal/exportfs"
 )
 
 const spotifyTracksFile = "spotify_liked_tracks.jsonl"
@@ -103,7 +105,7 @@ func readSpotifyTracks(source string) ([]*spotifyTrack, error) {
 	return saved.Tracks, nil
 }
 
-func exportSpotify(ctx context.Context, source, out string) (string, int, error) {
+func Export(ctx context.Context, source, out string) (string, int, error) {
 	if err := ctx.Err(); err != nil {
 		return "", 0, err
 	}
@@ -121,7 +123,7 @@ func exportSpotify(ctx context.Context, source, out string) (string, int, error)
 	if err != nil {
 		return "", 0, err
 	}
-	err = atomicFile(dir, spotifyTracksFile, func(f *os.File) error {
+	err = exportfs.AtomicFile(dir, spotifyTracksFile, func(f *os.File) error {
 		buffer := bufio.NewWriter(f)
 		enc := json.NewEncoder(buffer)
 		for _, track := range tracks {

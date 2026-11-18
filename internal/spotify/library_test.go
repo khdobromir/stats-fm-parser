@@ -1,4 +1,4 @@
-package main
+package spotify
 
 import (
 	"archive/zip"
@@ -6,10 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 func spotifyZIP(t *testing.T, entries map[string]string) string {
@@ -38,23 +35,6 @@ func spotifyZIP(t *testing.T, entries map[string]string) string {
 	return path
 }
 
-func TestSpotifyForm(t *testing.T) {
-	m := ui{width: 40, height: 15}
-	m.Update(tea.PasteMsg{Content: "volt"})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
-	if view := m.View().Content; !strings.Contains(view, "Любимые треки") || !strings.Contains(view, "Путь") {
-		t.Fatal(view)
-	}
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if view := m.View().Content; m.running || !strings.Contains(view, "Укажите путь") {
-		t.Fatal(view)
-	}
-	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
-	if m.o.user != "volt" || !strings.Contains(m.View().Content, "Пользователь") {
-		t.Fatal("draft lost when switching sources")
-	}
-}
-
 func TestSpotifyLibraryExport(t *testing.T) {
 	const library = `{"tracks":[
 		{"track":"Кукушка","artist":"Кино","album":"Чёрный альбом","uri":"spotify:track:123"},
@@ -73,15 +53,14 @@ func TestSpotifyLibraryExport(t *testing.T) {
 		"Userdata.json": "ignored",
 	})
 	for _, source := range []string{jsonFile, zipFile} {
-		var final update
-		dir, err := export(context.Background(), nil, options{spotifyLibrary: source, out: t.TempDir()}, func(u update) { final = u })
+		file, count, err := Export(context.Background(), source, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if final.p.Records != 3 || final.state != "finished" || final.file != filepath.Join(dir, spotifyTracksFile) {
-			t.Fatal(final)
+		if count != 3 || filepath.Base(file) != spotifyTracksFile {
+			t.Fatal(file, count)
 		}
-		if actual := string(readOutput(t, dir, spotifyTracksFile)); actual != expected {
+		if actual := string(readOutput(t, filepath.Dir(file), spotifyTracksFile)); actual != expected {
 			t.Fatalf("unexpected JSONL\n%s", actual)
 		}
 	}
@@ -96,7 +75,7 @@ func TestSpotifyLibraryEmptyAndErrors(t *testing.T) {
 		if err := os.WriteFile(source, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if file, _, err := exportSpotify(context.Background(), source, out); err == nil || file != "" {
+		if file, _, err := Export(context.Background(), source, out); err == nil || file != "" {
 			t.Fatalf("accepted invalid library %s", body)
 		}
 	}
@@ -104,7 +83,7 @@ func TestSpotifyLibraryEmptyAndErrors(t *testing.T) {
 		spotifyZIP(t, map[string]string{"Other.json": "{}"}),
 		spotifyZIP(t, map[string]string{"one/YourLibrary.json": "{}", "two/YourLibrary.json": "{}"}),
 	} {
-		if _, _, err := exportSpotify(context.Background(), path, out); err == nil {
+		if _, _, err := Export(context.Background(), path, out); err == nil {
 			t.Fatalf("accepted invalid archive %s", path)
 		}
 	}
@@ -113,17 +92,26 @@ func TestSpotifyLibraryEmptyAndErrors(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := exportSpotify(ctx, source, out); !errors.Is(err, context.Canceled) {
+	if _, _, err := Export(ctx, source, out); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
 	if entries, err := os.ReadDir(out); err != nil || len(entries) != 0 {
 		t.Fatalf("unexpected files: %v, %v", entries, err)
 	}
-	file, count, err := exportSpotify(context.Background(), source, out)
+	file, count, err := Export(context.Background(), source, out)
 	if err != nil || count != 0 {
 		t.Fatal(count, err)
 	}
 	if len(readOutput(t, filepath.Dir(file), spotifyTracksFile)) != 0 {
 		t.Fatal("empty library must produce empty JSONL")
 	}
+}
+
+func readOutput(t *testing.T, dir, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

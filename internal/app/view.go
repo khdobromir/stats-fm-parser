@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"strings"
 
+	"stats-fm-parser/internal/statsfm"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
-func operation(q query) string {
+func operation(q statsfm.Progress) string {
 	parts := strings.Split(q.Path, "/")
 	title := "Поиск профиля"
 	switch parts[0] {
@@ -66,7 +68,7 @@ func (m *ui) form(w, h int) []string {
 	}
 	lines := []string{m.heading("Профиль", fw), ""}
 	labels := []string{"Пользователь", "Период", "С даты", "По дату"}
-	values := []string{m.o.user, periodChoices[m.selected].label, m.o.from, m.o.to}[:m.lastField()+1]
+	values := []string{m.o.User, periodChoices[m.selected].label, m.o.From, m.o.To}[:m.lastField()+1]
 	for i, val := range values {
 		if h < 8 && i != m.field {
 			continue
@@ -100,10 +102,10 @@ func (m *ui) form(w, h int) []string {
 		}
 	}
 	details := []string{m.heading("Выгрузка", w-fw-4), "", "Треки · Исполнители · Альбомы · Жанры", "История и статистика"}
-	if m.o.period == "" {
+	if m.o.Period == "" {
 		details[3] += " · Ретроспективы"
 	}
-	if m.o.period == customPeriod {
+	if m.o.Period == statsfm.CustomPeriod {
 		details = append(details, "Даты включительно (UTC)")
 	}
 	if !wide {
@@ -111,7 +113,7 @@ func (m *ui) form(w, h int) []string {
 			details[0] = m.heading("Выгрузка", w)
 			lines = append(lines, "")
 			lines = append(lines, details...)
-		} else if m.o.period == customPeriod && h > len(lines) {
+		} else if m.o.Period == statsfm.CustomPeriod && h > len(lines) {
 			lines = append(lines, "Даты включительно (UTC)")
 		}
 		return lines
@@ -128,7 +130,7 @@ func (m *ui) form(w, h int) []string {
 func (m *ui) resultLines(w int) []string {
 	u := m.latest
 	label, role := "Ошибка экспорта", "red"
-	switch u.state {
+	switch u.State {
 	case "finished":
 		label, role = "Экспорт завершён", "green"
 	case "finished_with_gaps":
@@ -144,27 +146,27 @@ func (m *ui) resultLines(w int) []string {
 	}
 	lines := []string{m.colors.paint(role, label)}
 	add := func(s string) { lines = append(lines, strings.Split(ansi.Hardwrap(s, w, true), "\n")...) }
-	switch u.state {
+	switch u.State {
 	case "finished", "finished_with_gaps", "interrupted":
 		if u.file != "" {
-			add(fmt.Sprintf("Сохранено треков   %d", u.p.Records))
+			add(fmt.Sprintf("Сохранено треков   %d", u.Progress.Records))
 		} else {
-			add(fmt.Sprintf("Сохранено записей   %d", u.p.Records))
+			add(fmt.Sprintf("Сохранено записей   %d", u.Progress.Records))
 		}
 	}
 	if u.file != "" {
 		add("Файл   " + cleanText(u.file))
-	} else if u.dir != "" {
-		add("Каталог   " + cleanText(u.dir))
+	} else if u.Dir != "" {
+		add("Каталог   " + cleanText(u.Dir))
 	}
-	if u.state == "finished_with_gaps" {
+	if u.State == "finished_with_gaps" {
 		add("Причины пропусков — в manifest.json")
 	}
-	if u.err != nil && (u.state == "save_error" || !errors.Is(u.err, context.Canceled)) {
+	if u.err != nil && (u.State == "save_error" || !errors.Is(u.err, context.Canceled)) {
 		add(cleanText(strings.ReplaceAll(u.err.Error(), "\n", " · ")))
 	}
-	if u.state == "interrupted" || u.state == "save_error" {
-		path := strings.ReplaceAll(cleanText(u.dir), "'", "'\"'\"'")
+	if u.State == "interrupted" || u.State == "save_error" {
+		path := strings.ReplaceAll(cleanText(u.Dir), "'", "'\"'\"'")
 		add("Продолжить из каталога проекта")
 		add("go run . -resume '" + path + "'")
 	}
@@ -228,9 +230,9 @@ func (m *ui) View() tea.View {
 		body = []string{m.heading("Читаю библиотеку Spotify", contentW), m.colors.paint("yellow", m.note)}
 	case m.running:
 		title, keys = "Экспорт", "Esc остановить и сохранить"
-		p := m.latest.p
+		p := m.latest.Progress
 		body = []string{m.heading("Текущая операция", contentW)}
-		body = append(body, strings.Split(ansi.Wrap(m.colors.paint("accent", operation(p.query)), contentW, ""), "\n")...)
+		body = append(body, strings.Split(ansi.Wrap(m.colors.paint("accent", operation(p)), contentW, ""), "\n")...)
 		body = append(body, "", fmt.Sprintf("Записей     %s", m.colors.paint("accent", fmt.Sprint(p.Records))), fmt.Sprintf("Объектов    %d из %d", p.Done, p.Total))
 		if m.note != "" {
 			body = append(body, m.colors.paint("yellow", m.note))

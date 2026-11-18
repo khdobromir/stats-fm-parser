@@ -1,4 +1,4 @@
-package main
+package statsfm
 
 import (
 	"context"
@@ -243,12 +243,12 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 	return p, nil
 }
 
-type progress struct {
-	query
+type Progress struct {
+	Path, Period, Order  string
 	Records, Done, Total int
 }
 
-func collect(ctx context.Context, c *client, s *store, idx *index, notify func(progress)) error {
+func collect(ctx context.Context, c *client, s *store, idx *index, notify func(Progress)) error {
 	run := func(e entity, done int) error {
 		for _, q := range queries(s.cfg, e) {
 			for {
@@ -261,7 +261,7 @@ func collect(ctx context.Context, c *client, s *store, idx *index, notify func(p
 				} else if r.Status != "running" {
 					break
 				}
-				notify(progress{q, idx.count, done, len(idx.entities)})
+				notify(Progress{Path: q.Path, Period: q.Period, Order: q.Order, Records: idx.count, Done: done, Total: len(idx.entities)})
 				p, err := c.fetch(ctx, s.cfg, q, r)
 				if err != nil {
 					return fmt.Errorf("%s: %w", q.Path, err)

@@ -1,4 +1,4 @@
-package main
+package statsfm
 
 import (
 	"context"
@@ -20,7 +20,7 @@ func TestPeriodBounds(t *testing.T) {
 		{"ytd", "2026-01-01T00:00:00Z"},
 	} {
 		t.Run(tc.period, func(t *testing.T) {
-			cfg := (options{period: tc.period}).exportConfig(profile{Orders: []string{"COUNT", "TIME", "SPOTIFY", "default"}}, started)
+			cfg := (Options{Period: tc.period}).exportConfig(profile{Orders: []string{"COUNT", "TIME", "SPOTIFY", "default"}}, started)
 			first, err := time.Parse(time.RFC3339, tc.first)
 			if err != nil {
 				t.Fatal(err)
@@ -45,7 +45,7 @@ func TestPeriodBounds(t *testing.T) {
 
 func TestBoundedExportAndResume(t *testing.T) {
 	started := time.Date(2026, time.November, 8, 0, 0, 0, 0, time.UTC)
-	cfg := (options{period: customPeriod, from: "2026-11-05", to: "2026-11-06"}).exportConfig(profile{ID: "id", Orders: []string{"COUNT"}}, started)
+	cfg := (Options{Period: CustomPeriod, From: "2026-11-05", To: "2026-11-06"}).exportConfig(profile{ID: "id", Orders: []string{"COUNT"}}, started)
 	after, before := cfg.Window.After, cfg.Window.Before
 	dir := t.TempDir()
 	s, err := openStore(dir, &cfg)
@@ -71,7 +71,7 @@ func TestBoundedExportAndResume(t *testing.T) {
 	}))
 	defer server.Close()
 	c := &client{base: server.URL + "/", http: server.Client()}
-	if _, err = export(context.Background(), c, options{resume: dir}, func(update) {}); err != nil {
+	if _, err = c.export(context.Background(), Options{Resume: dir}, func(Update) {}); err != nil {
 		t.Fatal(err)
 	}
 	var summary struct {

@@ -1,4 +1,4 @@
-package main
+package statsfm
 
 import (
 	"errors"
@@ -58,7 +58,7 @@ func (q query) params(c config) url.Values {
 	if c.Window != nil {
 		v.Set("after", strconv.FormatInt(c.Window.After, 10))
 		v.Set("before", strconv.FormatInt(c.Window.Before, 10))
-	} else if q.Period == customPeriod {
+	} else if q.Period == CustomPeriod {
 		a, b, _ := dateBounds(c.From, c.To)
 		v.Set("after", strconv.FormatInt(a.UnixMilli(), 10))
 		v.Set("before", strconv.FormatInt(b.UnixMilli(), 10))

@@ -34,4 +34,11 @@ Periods are `week`, `weeks` (4 weeks), `months` (6 months), `ytd` (since January
 
 Each export gets its own directory. Keep `session.json` and `pages.jsonl` to resume a stats.fm export. For an individual listening history, select rows with `method == "streams"` in `streams.jsonl` to avoid counting track, artist, and album views of the same play.
 
+## Development
+
+- `internal/app` handles CLI flags, the terminal UI, and export selection.
+- `internal/statsfm` handles API requests, export sessions, and resume.
+- `internal/spotify` imports Liked Songs from account archives.
+- `internal/exportfs` provides atomic file writes shared by both exporters.
+
 Run checks with `go test -race ./...` and `go vet ./...`.

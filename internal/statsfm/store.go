@@ -1,4 +1,4 @@
-package main
+package statsfm
 
 import (
 	"bufio"
@@ -13,32 +13,14 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"stats-fm-parser/internal/exportfs"
 )
 
 type store struct {
 	dir           string
 	cfg           config
 	lock, journal *os.File
-}
-
-func atomicFile(dir, name string, write func(*os.File) error) error {
-	f, err := os.CreateTemp(dir, ".write-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	err = write(f)
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err = errors.Join(err, closeErr); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), filepath.Join(dir, name))
-}
-func writeJSON(dir, name string, v any) error {
-	return atomicFile(dir, name, func(f *os.File) error { return json.NewEncoder(f).Encode(v) })
 }
 
 func openStore(dir string, cfg *config) (*store, error) {
@@ -60,7 +42,7 @@ func openStore(dir string, cfg *config) (*store, error) {
 	if cfg != nil {
 		s.cfg = *cfg
 		flags |= os.O_CREATE | os.O_EXCL
-		err = writeJSON(dir, "session.json", s.cfg)
+		err = exportfs.WriteJSON(dir, "session.json", s.cfg)
 	} else {
 		var b []byte
 		b, err = os.ReadFile(filepath.Join(dir, "session.json"))
@@ -204,7 +186,7 @@ func (s *store) publish(idx *index, state string, reason error) error {
 				To   string `json:"to,omitempty"`
 				Data any    `json:"data"`
 			}{FetchedAt: p.FetchedAt, Type: name, User: s.cfg.Profile.ID, query: q, Data: row}
-			if q.Period == customPeriod {
+			if q.Period == CustomPeriod {
 				record.From = s.cfg.From
 				record.To = s.cfg.To
 			}
@@ -260,12 +242,12 @@ func (s *store) publish(idx *index, state string, reason error) error {
 	if s.cfg.Window != nil {
 		summary["window"] = s.cfg.Window
 	}
-	if err := writeJSON(s.dir, "summary.json", summary); err != nil {
+	if err := exportfs.WriteJSON(s.dir, "summary.json", summary); err != nil {
 		return err
 	}
 	manifest := object{"version": 1, "session": s.cfg, "state": state, "finished_at": ended, "coverage": coverage, "rows": counts, "queries": results}
 	if reason != nil {
 		manifest["reason"] = reason.Error()
 	}
-	return writeJSON(s.dir, "manifest.json", manifest)
+	return exportfs.WriteJSON(s.dir, "manifest.json", manifest)
 }

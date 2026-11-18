@@ -1,4 +1,4 @@
-package main
+package statsfm
 
 import (
 	"context"
@@ -16,8 +16,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 func readOutput(t *testing.T, dir, name string) []byte {
@@ -73,8 +71,8 @@ func TestExportResume(t *testing.T) {
 	c := &client{base: server.URL + "/", http: server.Client()}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	dir, err := export(ctx, c, options{user: "name", out: t.TempDir(), from: "2025-01-01", to: "2025-01-01"}, func(u update) {
-		if u.p.Path == "top/tracks" && u.p.Records == 1 {
+	dir, err := c.export(ctx, Options{User: "name", Out: t.TempDir(), From: "2025-01-01", To: "2025-01-01"}, func(u Update) {
+		if u.Progress.Path == "top/tracks" && u.Progress.Records == 1 {
 			cancel()
 		}
 	})
@@ -95,7 +93,7 @@ func TestExportResume(t *testing.T) {
 	if err = f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = export(context.Background(), c, options{resume: dir}, func(update) {}); err != nil {
+	if _, err = c.export(context.Background(), Options{Resume: dir}, func(Update) {}); err != nil {
 		t.Fatal(err)
 	}
 	var man struct {
@@ -224,14 +222,8 @@ func TestSummaryLimitAndLock(t *testing.T) {
 		t.Fatal("summary limit leaked into export")
 	}
 }
-func TestDatesAndInput(t *testing.T) {
-	m := ui{}
-	m.Update(tea.PasteMsg{Content: "volt\n"})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.o.user != "volt" || m.field != 1 {
-		t.Fatal(m.o, m.field)
-	}
-	if err := (options{user: "u", from: "2025-02-01", to: "2025-01-01"}).validate(); err == nil {
+func TestDateValidationAndDiscovery(t *testing.T) {
+	if err := (Options{User: "u", From: "2025-02-01", To: "2025-01-01"}).Validate(); err == nil {
 		t.Fatal("inverted dates")
 	}
 	q := query{Period: "custom"}
