@@ -146,9 +146,15 @@ func (m *ui) resultLines(w int) []string {
 	add := func(s string) { lines = append(lines, strings.Split(ansi.Hardwrap(s, w, true), "\n")...) }
 	switch u.state {
 	case "finished", "finished_with_gaps", "interrupted":
-		add(fmt.Sprintf("Сохранено записей   %d", u.p.Records))
+		if u.file != "" {
+			add(fmt.Sprintf("Сохранено треков   %d", u.p.Records))
+		} else {
+			add(fmt.Sprintf("Сохранено записей   %d", u.p.Records))
+		}
 	}
-	if u.dir != "" {
+	if u.file != "" {
+		add("Файл   " + cleanText(u.file))
+	} else if u.dir != "" {
 		add("Каталог   " + cleanText(u.dir))
 	}
 	if u.state == "finished_with_gaps" {
@@ -175,28 +181,51 @@ func (m *ui) contentWidth() int {
 	}
 	return max(1, min(m.width-2*margin, 112))
 }
+func (m *ui) spotifyForm(w int) []string {
+	path := m.libraryPath
+	if path == "" {
+		path = "ZIP или YourLibrary.json"
+	}
+	width := max(1, w-9)
+	if n := ansi.StringWidth(path); n > width {
+		path = ansi.TruncateLeft(path, n-width+1, "…")
+	}
+	lines := []string{
+		m.heading("Любимые треки", w),
+		m.colors.paint("selection", m.colors.paint("accent", pad("› Путь  "+path+"▏", w))),
+	}
+	if m.note != "" {
+		lines = append(lines, m.colors.paint("red", "! "+m.note))
+	}
+	return lines
+}
+
 func (m *ui) View() tea.View {
 	w, h := max(1, m.width), max(1, m.height)
 	contentW := m.contentWidth()
 	left := strings.Repeat(" ", (w-contentW)/2)
-	title, keys := "Новый экспорт", "Tab выбор  ·  Enter далее  ·  Esc выход"
+	title, keys := "Новый экспорт", "F2 Spotify · Tab поле · Enter далее · Esc выход"
 	if contentW < 42 {
-		keys = "Tab поле · Enter далее · Esc выход"
+		keys = "F2 Spotify · Enter далее · Esc"
 	}
 	if m.field == m.lastField() {
 		keys = strings.Replace(keys, "далее", "старт", 1)
 	}
 	if m.field == 1 {
-		keys = "←→ период · Enter далее · Esc выход"
-		if m.lastField() == 1 {
-			keys = strings.Replace(keys, "далее", "старт", 1)
-		}
+		keys = "F2 Spotify · ←→ период · Enter · Esc"
 	}
 	var body []string
+	brand := "▂▄▆  stats.fm"
+	if m.spotify {
+		brand = "▂▄▆  Spotify"
+	}
 	switch {
 	case m.latest.done:
 		title, keys = "Результат", "Enter / Esc выход"
 		body = m.resultLines(contentW)
+	case m.running && m.spotify:
+		title, keys = "Выгрузка", "Esc отменить"
+		body = []string{m.heading("Читаю библиотеку Spotify", contentW), m.colors.paint("yellow", m.note)}
 	case m.running:
 		title, keys = "Экспорт", "Esc остановить и сохранить"
 		p := m.latest.p
@@ -206,10 +235,13 @@ func (m *ui) View() tea.View {
 		if m.note != "" {
 			body = append(body, m.colors.paint("yellow", m.note))
 		}
+	case m.spotify:
+		title, keys = "Новый экспорт", "F2 stats.fm · Enter старт · Esc"
+		body = m.spotifyForm(contentW)
 	default:
 		body = m.form(contentW, h-4)
 	}
-	header := m.colors.paint("accent", "▂▄▆  stats.fm") + "   /   " + title
+	header := m.colors.paint("accent", brand) + "   /   " + title
 	room := max(0, h-3)
 	if m.latest.done && len(body) > room {
 		keys = "↑↓ листать  ·  Enter / Esc выход"

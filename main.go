@@ -13,13 +13,20 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 )
 
-type options struct{ user, period, from, to, out, resume string }
+type options struct{ user, period, from, to, out, resume, spotifyLibrary string }
 
 func (o options) validate() error {
+	if o.spotifyLibrary != "" {
+		if o.user != "" || o.period != "" || o.from != "" || o.to != "" || o.resume != "" {
+			return errors.New("-spotify-library нельзя сочетать с -user, -period, -from, -to или -resume")
+		}
+		return nil
+	}
 	if o.resume != "" {
 		if o.user != "" || o.period != "" || o.from != "" || o.to != "" {
 			return errors.New("-resume uses the original username and dates")
@@ -47,6 +54,7 @@ func (o options) validate() error {
 
 type update struct {
 	state string
+	file  string
 	dir   string
 	p     progress
 	done  bool
@@ -56,6 +64,15 @@ type update struct {
 func export(ctx context.Context, c *client, o options, report func(update)) (string, error) {
 	if err := o.validate(); err != nil {
 		return "", err
+	}
+	if o.spotifyLibrary != "" {
+		file, count, err := exportSpotify(ctx, o.spotifyLibrary, o.out)
+		if err != nil {
+			return "", err
+		}
+		dir := filepath.Dir(file)
+		report(update{dir: dir, file: file, state: "finished", p: progress{Records: count}})
+		return dir, nil
 	}
 	dir := o.resume
 	var cfg *config
@@ -120,6 +137,8 @@ type ui struct {
 	o                     options
 	field, selected       int
 	running               bool
+	spotify               bool
+	libraryPath           string
 	note                  string
 	latest                update
 	events                chan update
@@ -167,11 +186,38 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.running {
 				m.cancel()
 				m.note = "Останавливаю экспорт и сохраняю результат…"
+				if m.spotify {
+					m.note = "Отменяю выгрузку…"
+				}
 				return m, nil
 			}
 			return m, tea.Quit
 		}
 		if m.running {
+			return m, nil
+		}
+		if x.String() == "f2" {
+			m.spotify = !m.spotify
+			m.note = ""
+			return m, nil
+		}
+		if m.spotify {
+			switch x.String() {
+			case "enter":
+				if strings.TrimSpace(m.libraryPath) == "" {
+					m.note = "Укажите путь к ZIP или YourLibrary.json"
+					return m, nil
+				}
+				return m, m.start(options{spotifyLibrary: m.libraryPath, out: m.o.out})
+			case "backspace":
+				m.libraryPath = withoutLastRune(m.libraryPath)
+				m.note = ""
+			default:
+				m.libraryPath += cleanText(x.Text)
+				if x.Text != "" {
+					m.note = ""
+				}
+			}
 			return m, nil
 		}
 		fields := []*string{&m.o.user, nil, &m.o.from, &m.o.to}
@@ -214,33 +260,13 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			ctx, cancel := context.WithCancel(m.ctx)
-			m.cancel = cancel
-			m.running = true
-			m.note = ""
-			c, ch := m.c, m.events
-			return m, tea.Batch(m.listen, func() tea.Msg {
-				var final update
-				dir, err := export(ctx, c, o, func(u update) {
-					final = u
-					select {
-					case ch <- u:
-					default:
-					}
-				})
-				final.dir, final.done, final.err = dir, true, err
-				ch <- final
-				return nil
-			})
+			return m, m.start(o)
 		case "backspace":
 			if m.field == 1 {
 				return m, nil
 			}
 			m.note = ""
-			r := []rune(*fields[m.field])
-			if len(r) > 0 {
-				*fields[m.field] = string(r[:len(r)-1])
-			}
+			*fields[m.field] = withoutLastRune(*fields[m.field])
 		default:
 			if m.field != 1 && x.Text != "" {
 				m.note = ""
@@ -248,13 +274,40 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.PasteMsg:
-		if !m.running && !m.latest.done && m.field != 1 {
+		if !m.running && !m.latest.done && m.spotify {
+			m.libraryPath += cleanText(x.Content)
+			m.note = ""
+		} else if !m.running && !m.latest.done && m.field != 1 {
 			m.note = ""
 			fields := []*string{&m.o.user, nil, &m.o.from, &m.o.to}
 			*fields[m.field] += cleanText(x.Content)
 		}
 	}
 	return m, nil
+}
+func (m *ui) start(o options) tea.Cmd {
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.cancel = cancel
+	m.running = true
+	m.note = ""
+	c, ch := m.c, m.events
+	return tea.Batch(m.listen, func() tea.Msg {
+		var final update
+		dir, err := export(ctx, c, o, func(u update) {
+			final = u
+			select {
+			case ch <- u:
+			default:
+			}
+		})
+		final.dir, final.done, final.err = dir, true, err
+		ch <- final
+		return nil
+	})
+}
+func withoutLastRune(s string) string {
+	_, size := utf8.DecodeLastRuneInString(s)
+	return s[:len(s)-size]
 }
 func validDate(s string) bool { _, err := time.Parse(time.DateOnly, s); return err == nil }
 func cleanText(s string) string {
@@ -272,8 +325,18 @@ func run() error {
 	flag.StringVar(&o.from, "from", "", "first UTC date, YYYY-MM-DD")
 	flag.StringVar(&o.to, "to", "", "last UTC date, YYYY-MM-DD")
 	flag.StringVar(&o.out, "out", "exports", "parent directory for new exports")
+	flag.StringVar(&o.spotifyLibrary, "spotify-library", "", "export Liked Songs from a Spotify Account data ZIP or YourLibrary.json")
 	flag.StringVar(&o.resume, "resume", "", "resume a saved export directory")
 	flag.Parse()
+	var spotifyFlag bool
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "spotify-library" {
+			spotifyFlag = true
+		}
+	})
+	if spotifyFlag && o.spotifyLibrary == "" {
+		return errors.New("укажите путь после -spotify-library")
+	}
 	if flag.NArg() != 0 {
 		return errors.New("use -user USERNAME or run without arguments for the TUI")
 	}
@@ -282,9 +345,13 @@ func run() error {
 	c := &client{base: apiBase, http: &http.Client{Timeout: 45 * time.Second}, pace: 200 * time.Millisecond}
 	var dir string
 	var err error
-	if o.user != "" || o.resume != "" || o.period != "" {
+	if o.spotifyLibrary != "" || o.user != "" || o.resume != "" || o.period != "" {
 		last := time.Time{}
 		dir, err = export(ctx, c, o, func(u update) {
+			if u.file != "" {
+				fmt.Fprintf(os.Stderr, "Сохранено треков: %d\n%s\n", u.p.Records, u.file)
+				return
+			}
 			if u.p.Path == "" || time.Since(last) > 2*time.Second {
 				fmt.Fprintf(os.Stderr, "%s  %s  %d records\n", u.dir, u.p.Path, u.p.Records)
 				last = time.Now()
@@ -300,7 +367,7 @@ func run() error {
 			dir, err = m.latest.dir, m.latest.err
 		}
 	}
-	if dir != "" {
+	if dir != "" && o.spotifyLibrary == "" {
 		fmt.Fprintln(os.Stderr, "Экспорт:", filepath.Clean(dir))
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "Для продолжения передайте этот каталог через -resume.")
