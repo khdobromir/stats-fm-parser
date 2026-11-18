@@ -1,0 +1,260 @@
+{
+  "after": "1998-11-04T00:00:00Z",
+  "before": "1998-11-04T23:59:59.999Z",
+  "reports": {
+    "streams/albums/1": [
+      {
+        "albumId": 1,
+        "artistIds": [
+          1
+        ],
+        "contextId": "context-1",
+        "endTime": "1998-11-04T16:47:00.000Z",
+        "id": "play-1",
+        "importId": 1,
+        "playedMs": 292185,
+        "trackId": 1,
+        "trackName": "Track 1",
+        "userId": "listener"
+      },
+      {
+        "albumId": 1,
+        "artistIds": [
+          1
+        ],
+        "contextId": "context-1",
+        "endTime": "1998-11-04T16:42:00.000Z",
+        "id": "play-2",
+        "importId": 1,
+        "playedMs": 266643,
+        "trackId": 2,
+        "trackName": "Track 2",
+        "userId": "listener"
+      },
+      {
+        "albumId": 1,
+        "artistIds": [
+          1
+        ],
+        "contextId": "context-1",
+        "endTime": "1998-11-04T16:38:00.000Z",
+        "id": "play-3",
+        "importId": 1,
+        "playedMs": 303688,
+        "trackId": 3,
+        "trackName": "Track 3",
+        "userId": "listener"
+      }
+    ],
+    "streams/artists/1": [
+      {
+        "albumId": 1,
+        "artistIds": [
+          1
+        ],
+        "contextId": "context-1",
+        "endTime": "1998-11-04T16:47:00.000Z",
+        "id": "play-1",
+        "importId": 1,
+        "playedMs": 292185,
+        "trackId": 1,
+        "trackName": "Track 1",
+        "userId": "listener"
+      },
+      {
+        "albumId": 1,
+        "artistIds": [
+          1
+        ],
+        "contextId": "context-1",
+        "endTime": "1998-11-04T16:42:00.000Z",
+        "id": "play-2",
+        "importId": 1,
+        "playedMs": 266643,
+        "trackId": 2,
+        "trackName": "Track 2",
+        "userId": "listener"
+      },
+      {
+        "albumId": 1,
+        "artistIds": [
+          1
+        ],
+        "contextId": "context-1",
+        "endTime": "1998-11-04T16:38:00.000Z",
+        "id": "play-3",
+        "importId": 1,
+        "playedMs": 303688,
+        "trackId": 3,
+        "trackName": "Track 3",
+        "userId": "listener"
+      }
+    ],
+    "streams/stats/dates": {
+      "days": {
+        "4": {
+          "count": 6,
+          "durationMs": 1744815
+        }
+      },
+      "hours": {
+        "16": {
+          "count": 3,
+          "durationMs": 862516
+        },
+        "7": {
+          "count": 3,
+          "durationMs": 882299
+        }
+      },
+      "monthDays": {
+        "4": {
+          "count": 6,
+          "durationMs": 1744815
+        }
+      },
+      "months": {
+        "11": {
+          "count": 6,
+          "durationMs": 1744815
+        }
+      },
+      "weekDays": {
+        "3": {
+          "count": 6,
+          "durationMs": 1744815
+        }
+      },
+      "weekdays": {
+        "3": {
+          "count": 6,
+          "durationMs": 1744815
+        }
+      },
+      "years": {
+        "1998": {
+          "count": 6,
+          "durationMs": 1744815
+        }
+      }
+    },
+    "streams/stats/per-day": {
+      "average": {
+        "count": 6,
+        "durationMs": 1744815
+      },
+      "days": {
+        "1998-11-04T00:00:00.000Z": {
+          "count": 6,
+          "cumulative": {
+            "count": 6,
+            "durationMs": 1744815
+          },
+          "durationMs": 1744815
+        }
+      }
+    },
+    "streams/tracks/1": [
+      {
+        "albumId": 1,
+        "artistIds": [
+          1
+        ],
+        "contextId": "context-1",
+        "endTime": "1998-11-04T16:47:00.000Z",
+        "id": "play-1",
+        "importId": 1,
+        "playedMs": 292185,
+        "trackId": 1,
+        "trackName": "Track 1",
+        "userId": "listener"
+      }
+    ]
+  },
+  "streams": [
+    {
+      "albumId": 1,
+      "artistIds": [
+        1
+      ],
+      "contextId": "context-1",
+      "endTime": "1998-11-04T16:47:00.000Z",
+      "id": "play-1",
+      "importId": 1,
+      "playedMs": 292185,
+      "trackId": 1,
+      "trackName": "Track 1",
+      "userId": "listener"
+    },
+    {
+      "albumId": 1,
+      "artistIds": [
+        1
+      ],
+      "contextId": "context-1",
+      "endTime": "1998-11-04T16:42:00.000Z",
+      "id": "play-2",
+      "importId": 1,
+      "playedMs": 266643,
+      "trackId": 2,
+      "trackName": "Track 2",
+      "userId": "listener"
+    },
+    {
+      "albumId": 1,
+      "artistIds": [
+        1
+      ],
+      "contextId": "context-1",
+      "endTime": "1998-11-04T16:38:00.000Z",
+      "id": "play-3",
+      "importId": 1,
+      "playedMs": 303688,
+      "trackId": 3,
+      "trackName": "Track 3",
+      "userId": "listener"
+    },
+    {
+      "albumId": 2,
+      "artistIds": [
+        2
+      ],
+      "contextId": "context-2",
+      "endTime": "1998-11-04T07:40:00.000Z",
+      "id": "play-4",
+      "importId": 1,
+      "playedMs": 316376,
+      "trackId": 4,
+      "trackName": "Track 4",
+      "userId": "listener"
+    },
+    {
+      "albumId": 2,
+      "artistIds": [
+        2
+      ],
+      "contextId": "context-2",
+      "endTime": "1998-11-04T07:27:00.000Z",
+      "id": "play-5",
+      "importId": 1,
+      "playedMs": 354670,
+      "trackId": 5,
+      "trackName": "Track 5",
+      "userId": "listener"
+    },
+    {
+      "albumId": 3,
+      "artistIds": [
+        3
+      ],
+      "contextId": "context-3",
+      "endTime": "1998-11-04T07:14:00.000Z",
+      "id": "play-6",
+      "importId": 1,
+      "playedMs": 211253,
+      "trackId": 6,
+      "trackName": "Track 6",
+      "userId": "listener"
+    }
+  ]
+}

@@ -55,6 +55,10 @@ func TestBoundedExportAndResume(t *testing.T) {
 	s.close()
 	// Run the resume entry point against a server that ignores the lower bound.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/id" {
+			fmt.Fprint(w, `{"item":{"id":"id"}}`)
+			return
+		}
 		q := r.URL.Query()
 		if q.Get("after") != strconv.FormatInt(after, 10) || q.Get("before") != strconv.FormatInt(before, 10) {
 			t.Errorf("incorrect resume parameters for %s: %v", r.URL.Path, q)

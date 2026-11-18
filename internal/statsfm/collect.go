@@ -13,31 +13,38 @@ import (
 )
 
 type page struct {
-	FetchedAt time.Time `json:"fetched_at"`
-	Query     query     `json:"query"`
-	Rows      []any     `json:"rows,omitempty"`
-	Offset    int       `json:"next_offset,omitempty"`
-	Before    int64     `json:"next_before,omitempty"`
-	Status    string    `json:"status"`
-	Note      string    `json:"note,omitempty"`
+	FetchedAt time.Time       `json:"fetched_at"`
+	Query     query           `json:"query"`
+	Rows      []any           `json:"rows,omitempty"`
+	Offset    int             `json:"next_offset,omitempty"`
+	Before    int64           `json:"next_before,omitempty"`
+	Status    string          `json:"status"`
+	Note      string          `json:"note,omitempty"`
+	Response  json.RawMessage `json:"response,omitempty"`
+	Source    *reportSource   `json:"source,omitempty"`
 }
 type result struct {
-	Query  query  `json:"query"`
-	Count  int    `json:"count"`
-	Status string `json:"status"`
-	Note   string `json:"note,omitempty"`
-	Offset int    `json:"next_offset,omitempty"`
-	Before int64  `json:"next_before,omitempty"`
+	Query  query         `json:"query"`
+	Count  int           `json:"count"`
+	Status string        `json:"status"`
+	Note   string        `json:"note,omitempty"`
+	Offset int           `json:"next_offset,omitempty"`
+	Before int64         `json:"next_before,omitempty"`
+	Source *reportSource `json:"source,omitempty"`
 	seen   map[string]bool
 }
 type index struct {
 	results    map[query]*result
 	entities   []entity
 	discovered map[entity]bool
+	missing    map[string]bool
+	metadata   map[entity]bool
 	count      int
 }
 
-func newIndex() *index { return &index{results: map[query]*result{}, discovered: map[entity]bool{}} }
+func newIndex() *index {
+	return &index{results: map[query]*result{}, discovered: map[entity]bool{}, metadata: map[entity]bool{}, missing: map[string]bool{}}
+}
 func key(q query, row any) string {
 	o, _ := row.(object)
 	if q.file() == "rankings" {
@@ -51,7 +58,7 @@ func key(q query, row any) string {
 			}
 		}
 	}
-	if id, ok := o["id"].(string); ok {
+	if id, ok := o["id"].(string); ok && id != "" {
 		return id
 	}
 	b, _ := json.Marshal(row)
@@ -68,6 +75,7 @@ func (i *index) apply(p page) {
 	r.Before = p.Before
 	r.Status = p.Status
 	r.Note = p.Note
+	r.Source = p.Source
 	i.count += len(p.Rows)
 	if p.Status == "running" && (r.seen == nil || p.Query.history()) {
 		r.seen = map[string]bool{}
@@ -75,6 +83,22 @@ func (i *index) apply(p page) {
 	for _, row := range p.Rows {
 		if p.Status == "running" && (!p.Query.history() || streamMillis(row) == p.Before) {
 			r.seen[key(p.Query, row)] = true
+		}
+		if p.Query.metadata() {
+			kind, _, _ := strings.Cut(p.Query.Path, "/")
+			item, _ := row.(object)
+			if id := entityID(item["id"]); id != "" {
+				i.metadata[entity{kind, id}] = true
+			}
+			continue
+		}
+		if p.Response != nil {
+			switch p.Query.Path {
+			case "streams":
+				i.checkStreamFields(row)
+			case "top/tracks", "top/albums", "top/artists":
+				i.noteRankingMetadata(p.Query, row)
+			}
 		}
 		discover(row, "", func(e entity) {
 			if !i.discovered[e] {
@@ -87,7 +111,7 @@ func (i *index) apply(p page) {
 		r.seen = nil
 	}
 }
-func rowsFor(q query, v any) ([]any, error) {
+func rowsFor(q query, v any, cfg config) ([]any, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -110,7 +134,7 @@ func rowsFor(q query, v any) ([]any, error) {
 	if q.paged() {
 		return nil, errors.New("expected an array of items")
 	}
-	if _, ok := v.(object); !ok {
+	if _, ok := v.(object); !ok && !(cfg.version() >= 2 && (q.Path == "friends/count" || q.global() && !q.metadata())) {
 		return nil, errors.New("expected a report object")
 	}
 	return []any{v}, nil
@@ -131,17 +155,19 @@ const pageSize = 100
 func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (page, error) {
 	p := page{Query: q, Status: "complete", Offset: r.Offset, Before: r.Before}
 	v := q.params(cfg)
-	before := cfg.Started.UnixMilli()
-	if cfg.Window != nil {
-		before = min(before, cfg.Window.Before)
-	}
-	if q.paged() {
+	before := cfg.historyEnd()
+	paged := q.paged() && (cfg.version() == 1 || q.Path != "streams/recent")
+
+	if paged {
 		v.Set("limit", strconv.Itoa(pageSize))
 		if q.history() {
 			if r.Before != 0 {
 				before = min(before, r.Before)
 			}
 			if cfg.Window != nil && before < cfg.Window.After {
+				if cfg.version() >= 2 && r.Count == 0 {
+					p.Status = "empty"
+				}
 				return p, nil
 			}
 			v.Set("before", strconv.FormatInt(before, 10))
@@ -150,7 +176,20 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 			v.Set("offset", strconv.Itoa(r.Offset))
 		}
 	}
-	body, err := c.get(ctx, url.PathEscape(cfg.Profile.ID)+"/"+q.Path, v)
+	target := c.base + url.PathEscape(cfg.Profile.ID)
+	switch {
+	case q.Path == "user":
+	case q.metadata():
+		target = strings.TrimSuffix(c.base, "users/") + q.Path
+	case q.global():
+		target = strings.TrimSuffix(c.base, "users/") + q.Path + "/" + url.PathEscape(cfg.Profile.ID)
+	default:
+		target += "/" + q.Path
+	}
+	raw, err := c.get(ctx, target, v)
+	if cfg.version() >= 2 {
+		p.Response = raw
+	}
 	if err != nil {
 		var ae *apiError
 		if errors.As(err, &ae) && ae.code != 429 {
@@ -174,21 +213,41 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 		}
 		return p, err
 	}
-	rows, err := rowsFor(q, body)
+	rows, err := rowsFor(q, decodeResponse(raw), cfg)
 	if err != nil {
 		p.Status = "partial"
 		p.Note = err.Error()
 		return p, nil
 	}
-	if !q.paged() {
-		p.Rows = rows
+	if q.metadata() {
+		p.Rows = metadataRows(q, rows)
+		want := 1
+		if q.IDs != "" {
+			want = strings.Count(q.IDs, ",") + 1
+		}
+		if len(p.Rows) < want {
+			p.Status = "partial"
+			p.Note = "catalog response did not contain every requested ID"
+		}
 		return p, nil
 	}
 	if len(rows) == 0 {
+		if cfg.version() >= 2 && r.Count == 0 {
+			p.Status = "empty"
+		}
+		return p, nil
+	}
+	if !paged {
+		p.Rows = rows
 		return p, nil
 	}
 	oldest := int64(0)
+	previous := before
 	reachedStart := false
+	var pageIDs map[string]bool
+	if cfg.version() >= 2 && q.history() {
+		pageIDs = map[string]bool{}
+	}
 	for _, row := range rows {
 		if q.history() {
 			ms := streamMillis(row)
@@ -204,6 +263,11 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 					p.Note = "API ignored the time cursor"
 					continue
 				}
+				if cfg.version() >= 2 && ms > previous {
+					p.Status = "partial"
+					p.Note = "API returned history out of time order"
+				}
+				previous = ms
 				if cfg.Window != nil && ms < cfg.Window.After {
 					reachedStart = true
 					continue
@@ -213,22 +277,36 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 				}
 			}
 		}
-		if !r.seen[key(q, row)] {
+		id := key(q, row)
+		if !r.seen[id] && !pageIDs[id] {
 			p.Rows = append(p.Rows, row)
+			if pageIDs != nil && streamID(row) != "" {
+				pageIDs[id] = true
+			}
 		}
 	}
-	if p.Status == "partial" || reachedStart {
+	if p.Status == "partial" {
+		return p, nil
+	}
+	if reachedStart {
+		if cfg.version() >= 2 && r.Count+len(p.Rows) == 0 {
+			p.Status = "empty"
+		}
 		return p, nil
 	}
 	if q.history() {
-		// before is inclusive. Re-read the boundary millisecond to retain tied streams.
-		if oldest == r.Before && len(rows) < pageSize {
-			oldest--
+		boundary := r.Before
+		if cfg.version() >= 2 {
+			boundary = before
 		}
-		if r.Before != 0 && oldest >= r.Before {
-			p.Status = "partial"
-			p.Note = "time cursor stopped advancing"
-			return p, nil
+		// An inclusive page that fills at a single millisecond cannot advance safely.
+		if boundary != 0 && oldest == boundary {
+			if len(rows) >= pageSize {
+				p.Status = "partial"
+				p.Note = "time cursor stopped advancing"
+				return p, nil
+			}
+			oldest--
 		}
 		p.Before = oldest
 	} else {
@@ -249,41 +327,68 @@ type Progress struct {
 }
 
 func collect(ctx context.Context, c *client, s *store, idx *index, notify func(Progress)) error {
-	run := func(e entity, done int) error {
-		for _, q := range queries(s.cfg, e) {
-			for {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				r := idx.results[q]
-				if r == nil {
-					r = &result{Query: q}
-				} else if r.Status != "running" {
-					break
-				}
-				notify(Progress{Path: q.Path, Period: q.Period, Order: q.Order, Records: idx.count, Done: done, Total: len(idx.entities)})
-				p, err := c.fetch(ctx, s.cfg, q, r)
+	run := func(q query, done int) error {
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			r := idx.results[q]
+			if r == nil {
+				r = &result{Query: q}
+			} else if r.Status != "running" {
+				return nil
+			}
+			notify(Progress{Path: q.Path, Period: q.Period, Order: q.Order, Records: idx.count, Done: done, Total: len(idx.entities)})
+			var p page
+			var err error
+			if source := idx.reconstruct(s.cfg, q); source != nil {
+				p = page{Query: q, Status: "reconstructible", Source: source}
+			} else {
+				p, err = c.fetch(ctx, s.cfg, q, r)
 				if err != nil {
 					return fmt.Errorf("%s: %w", q.Path, err)
 				}
-				if err = s.append(p); err != nil {
-					return err
-				}
-				idx.apply(p)
 			}
+			if err = s.append(p); err != nil {
+				return err
+			}
+			idx.apply(p)
 		}
-		return nil
 	}
-	if err := run(entity{}, 0); err != nil {
-		return err
+	if s.cfg.version() >= 2 {
+		if err := run(query{Path: "user"}, 0); err != nil {
+			return err
+		}
+	}
+	for _, q := range queries(s.cfg, entity{}) {
+		if err := run(q, 0); err != nil {
+			return err
+		}
 	}
 	for n := 0; n < len(idx.entities); n++ {
-		if err := run(idx.entities[n], n); err != nil {
-			return err
+		for _, q := range queries(s.cfg, idx.entities[n]) {
+			if err := run(q, n); err != nil {
+				return err
+			}
+		}
+	}
+	if s.cfg.version() >= 2 {
+		for _, q := range idx.metadataBatches() {
+			if err := run(q, len(idx.entities)); err != nil {
+				return err
+			}
+		}
+		for _, e := range idx.entities {
+			if !idx.metadata[e] {
+				if err := run(query{Path: e.kind + "/" + e.id}, len(idx.entities)); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
 }
+
 func compactRanking(q query, row any) object {
 	o, _ := row.(object)
 	kind := strings.TrimSuffix(strings.TrimPrefix(q.Path, "top/"), "s")

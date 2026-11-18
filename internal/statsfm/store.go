@@ -56,6 +56,10 @@ func openStore(dir string, cfg *config) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s.cfg.Version < 0 || s.cfg.Version > 2 {
+		err = fmt.Errorf("unsupported stats.fm export version %d", s.cfg.Version)
+		return nil, err
+	}
 	if w := s.cfg.Window; w != nil && (len(s.cfg.Periods) != 1 || w.After > w.Before) {
 		err = errors.New("invalid export window")
 		return nil, err
@@ -141,7 +145,11 @@ func (s *store) publish(idx *index, state string, reason error) error {
 			f.Close()
 		}
 	}()
-	for _, name := range []string{"rankings", "streams", "statistics", "recaps"} {
+	names := []string{"rankings", "streams", "statistics", "recaps"}
+	if s.cfg.version() >= 2 {
+		names = append(names, "metadata")
+	}
+	for _, name := range names {
 		f, err := os.OpenFile(filepath.Join(stage, name+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
 			return err
@@ -153,7 +161,7 @@ func (s *store) publish(idx *index, state string, reason error) error {
 	}
 	err = s.replay(func(p page) error {
 		q := p.Query
-		name := q.file()
+		name := q.outputFile(s.cfg)
 		general := name == "rankings" && strings.Count(q.Path, "/") == 1
 		if general && groups[q] == nil {
 			groups[q] = &summaryGroup{Query: q, Rows: []object{}}
@@ -165,7 +173,7 @@ func (s *store) publish(idx *index, state string, reason error) error {
 			if general && len(groups[q].Rows) < 20 {
 				groups[q].Rows = append(groups[q].Rows, compactRanking(q, row))
 			}
-			if name == "rankings" {
+			if name == "rankings" && s.cfg.version() == 1 {
 				if o, ok := row.(object); ok {
 					for _, field := range []string{"streams", "playedMs"} {
 						if _, has := o[field]; !has {
@@ -233,7 +241,10 @@ func (s *store) publish(idx *index, state string, reason error) error {
 		if d := strings.Compare(a.Period, b.Period); d != 0 {
 			return d
 		}
-		return strings.Compare(a.Order, b.Order)
+		if d := strings.Compare(a.Order, b.Order); d != 0 {
+			return d
+		}
+		return strings.Compare(a.IDs, b.IDs)
 	}
 	slices.SortFunc(rankings, func(a, b *summaryGroup) int { return cmp(a.Query, b.Query) })
 	slices.SortFunc(results, func(a, b *result) int { return cmp(a.Query, b.Query) })
@@ -245,7 +256,7 @@ func (s *store) publish(idx *index, state string, reason error) error {
 	if err := exportfs.WriteJSON(s.dir, "summary.json", summary); err != nil {
 		return err
 	}
-	manifest := object{"version": 1, "session": s.cfg, "state": state, "finished_at": ended, "coverage": coverage, "rows": counts, "queries": results}
+	manifest := object{"version": s.cfg.version(), "session": s.cfg, "state": state, "finished_at": ended, "coverage": coverage, "rows": counts, "queries": results}
 	if reason != nil {
 		manifest["reason"] = reason.Error()
 	}

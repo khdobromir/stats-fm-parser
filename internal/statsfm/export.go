@@ -2,6 +2,7 @@ package statsfm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -62,11 +63,13 @@ func (c *client) export(ctx context.Context, o Options, report func(Update)) (st
 	}
 	dir := o.Resume
 	var cfg *config
+	var profileResponse json.RawMessage
 	if dir == "" {
-		p, err := c.profile(ctx, o.User)
+		p, response, err := c.profile(ctx, o.User)
 		if err != nil {
 			return "", err
 		}
+		profileResponse = response
 		selected := o.exportConfig(p, time.Now())
 		cfg = &selected
 		if err = os.MkdirAll(o.Out, 0700); err != nil {
@@ -87,14 +90,27 @@ func (c *client) export(ctx context.Context, o Options, report func(Update)) (st
 	if err = s.replay(func(p page) error { idx.apply(p); return nil }); err != nil {
 		return dir, err
 	}
-	if err = exportfs.WriteJSON(dir, "manifest.json", object{"version": 1, "session": s.cfg, "state": "running"}); err != nil {
+	if profileResponse != nil {
+		q := query{Path: "user"}
+		p := page{Query: q, Status: "complete", Response: profileResponse}
+		p.Rows, err = rowsFor(q, decodeResponse(profileResponse), s.cfg)
+		if err != nil {
+			return dir, err
+		}
+		if err = s.append(p); err != nil {
+			return dir, err
+		}
+		idx.apply(p)
+	}
+	if err = exportfs.WriteJSON(dir, "manifest.json", object{"version": s.cfg.version(), "session": s.cfg, "state": "running"}); err != nil {
 		return dir, err
 	}
 	var last Progress
 	err = collect(ctx, c, s, idx, func(p Progress) { last = p; report(Update{Dir: dir, Progress: p}) })
 	state := "finished"
 	for _, r := range idx.results {
-		if r.Status != "complete" {
+		if r.Status != "complete" && r.Status != "empty" && r.Status != "reconstructible" &&
+			!(r.Query.metadata() && r.Query.IDs != "") {
 			state = "finished_with_gaps"
 			break
 		}

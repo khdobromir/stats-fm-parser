@@ -55,8 +55,7 @@ func retryDelay(header string, fallback time.Duration) time.Duration {
 	}
 	return fallback
 }
-func (c *client) get(ctx context.Context, path string, q url.Values) (any, error) {
-	target := c.base + path
+func (c *client) get(ctx context.Context, target string, q url.Values) (json.RawMessage, error) {
 	if len(q) > 0 {
 		target += "?" + q.Encode()
 	}
@@ -87,20 +86,20 @@ func (c *client) get(ctx context.Context, path string, q url.Values) (any, error
 					return nil, nil
 				}
 				if resp.StatusCode/100 == 2 {
-					var value any
-					dec := json.NewDecoder(bytes.NewReader(data))
-					dec.UseNumber()
 					if !json.Valid(data) {
-						return nil, fmt.Errorf("%w: expected JSON", errFormat)
+						raw, _ := json.Marshal(string(data))
+						return raw, fmt.Errorf("%w: expected JSON", errFormat)
 					}
-					err = dec.Decode(&value)
-					return value, err
+					return data, nil
 				}
 				var problem struct{ Message string }
 				_ = json.Unmarshal(data, &problem)
 				err = &apiError{resp.StatusCode, problem.Message}
-				if resp.StatusCode != 429 && resp.StatusCode < 500 {
-					return nil, err
+				if attempt >= 3 || (resp.StatusCode != 429 && resp.StatusCode < 500) {
+					if !json.Valid(data) {
+						data, _ = json.Marshal(string(data))
+					}
+					return data, err
 				}
 				delay = retryDelay(resp.Header.Get("Retry-After"), delay)
 			}
@@ -126,20 +125,20 @@ type profile struct {
 func safeSegment(s string) bool {
 	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, "/\\?#\x00\r\n")
 }
-func (c *client) profile(ctx context.Context, username string) (profile, error) {
+func (c *client) profile(ctx context.Context, username string) (profile, json.RawMessage, error) {
 	var p profile
 	if !safeSegment(username) {
-		return p, errors.New("invalid username")
+		return p, nil, errors.New("invalid username")
 	}
-	v, err := c.get(ctx, url.PathEscape(username), nil)
+	raw, err := c.get(ctx, c.base+url.PathEscape(username), nil)
 	if err != nil {
-		return p, err
+		return p, nil, err
 	}
-	envelope, _ := v.(object)
+	envelope, _ := decodeResponse(raw).(object)
 	item, _ := envelope["item"].(object)
 	p.ID, _ = item["id"].(string)
 	if !safeSegment(p.ID) {
-		return p, errors.New("profile has no valid ID")
+		return p, nil, errors.New("profile has no valid ID")
 	}
 	p.Username, _ = item["customId"].(string)
 	if p.Username == "" {
@@ -162,5 +161,17 @@ func (c *client) profile(ctx context.Context, username string) (profile, error) 
 	if len(p.Orders) == 2 {
 		p.Orders = append(p.Orders, "default")
 	}
-	return p, nil
+	return p, raw, nil
+}
+
+// get validates JSON before it is decoded or added to the journal.
+func decodeResponse(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var body any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	_ = dec.Decode(&body)
+	return body
 }

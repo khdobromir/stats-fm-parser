@@ -54,6 +54,10 @@ func TestExportResume(t *testing.T) {
 			}
 		case path == "top/artists/1/albums" && q.Get("offset") == "0" && q.Get("range") == "today" && q.Get("orderBy") == "COUNT":
 			fmt.Fprint(w, `{"items":[{"position":1,"album":{"id":3}}]}`)
+		case path == "friends/count":
+			fmt.Fprint(w, `{"item":4,"source":"api"}`)
+		case r.URL.Path == "/tracks/9007199254740993/top/listeners/place/id":
+			fmt.Fprint(w, `{"item":{"place":3,"unknownPlaceField":true}}`)
 		case path == "streams/current":
 			w.WriteHeader(403)
 			fmt.Fprint(w, `{"message":"hidden"}`)
@@ -71,9 +75,13 @@ func TestExportResume(t *testing.T) {
 	c := &client{base: server.URL + "/", http: server.Client()}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	topPages := 0
 	dir, err := c.export(ctx, Options{User: "name", Out: t.TempDir(), From: "2025-01-01", To: "2025-01-01"}, func(u Update) {
-		if u.Progress.Path == "top/tracks" && u.Progress.Records == 1 {
-			cancel()
+		if u.Progress.Path == "top/tracks" && u.Progress.Period == "today" && u.Progress.Order == "COUNT" {
+			topPages++
+			if topPages == 2 {
+				cancel()
+			}
 		}
 	})
 	if !errors.Is(err, context.Canceled) {
@@ -110,14 +118,14 @@ func TestExportResume(t *testing.T) {
 	for _, r := range man.Queries {
 		byQuery[r.Query] = r
 	}
-	top := query{"top/tracks", "today", "COUNT"}
+	top := query{Path: "top/tracks", Period: "today", Order: "COUNT"}
 	if r := byQuery[top]; r.Count != 2 || r.Status != "partial" {
 		t.Fatal(r)
 	}
 	if byQuery[query{Path: "streams/current"}].Status != "private" || byQuery[query{Path: "recaps/yearly"}].Status != "partial" || byQuery[query{Path: "recaps/monthly"}].Count != 1 {
 		t.Fatal("incorrect coverage")
 	}
-	if byQuery[query{Path: "top/albums/3/tracks", Period: "today", Order: "COUNT"}].Status != "complete" {
+	if byQuery[query{Path: "top/albums/3/tracks", Period: "today", Order: "COUNT"}].Status != "empty" {
 		t.Fatal("nested album was skipped")
 	}
 	mu.Lock()
@@ -125,6 +133,17 @@ func TestExportResume(t *testing.T) {
 	if hits["/name"] != 1 || hits["/id/top/tracks?limit=100&offset=0&orderBy=COUNT&range=today"] != 2 {
 		t.Fatal("completed request was repeated after resume")
 	}
+	for _, path := range []string{"/id/profile", "/id/privacy", "/id/friends", "/id/friends/count", "/id/achievements/completed",
+		"/id/achievements/uncompleted", "/id/streams/recent", "/id/recaps/time-capsule", "/id/records/artists", "/tracks/9007199254740993/top/listeners/place/id"} {
+		if hits[path] != 1 {
+			t.Errorf("public query %s: %d requests", path, hits[path])
+		}
+	}
+	stats := string(readOutput(t, dir, "statistics.jsonl"))
+	if !strings.Contains(stats, `"data":4`) || !strings.Contains(stats, `"unknownPlaceField":true`) {
+		t.Fatal("public data missing from statistics.jsonl")
+	}
+
 	var summary struct{ Rankings []summaryGroup }
 	if err = json.Unmarshal(readOutput(t, dir, "summary.json"), &summary); err != nil {
 		t.Fatal(err)
@@ -138,7 +157,7 @@ func TestExportResume(t *testing.T) {
 		t.Fatal(rows)
 	}
 	b := string(readOutput(t, dir, "rankings.jsonl"))
-	if !strings.Contains(b, "9007199254740993") || !strings.Contains(b, `"playedMs":null`) {
+	if !strings.Contains(b, "9007199254740993") || strings.Contains(b, `"playedMs":null`) {
 		t.Fatal(b)
 	}
 	for _, name := range []string{"rankings", "streams", "statistics", "recaps"} {
@@ -202,7 +221,7 @@ func TestSummaryLimitAndLock(t *testing.T) {
 		other.close()
 		t.Fatal("concurrent writer")
 	}
-	p := page{Query: query{"top/artists", "today", "TIME"}, Status: "complete"}
+	p := page{Query: query{Path: "top/artists", Period: "today", Order: "TIME"}, Status: "complete"}
 	for i := 1; i <= 22; i++ {
 		p.Rows = append(p.Rows, object{"position": i, "artist": object{"id": i}})
 	}
