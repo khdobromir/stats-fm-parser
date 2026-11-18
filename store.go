@@ -74,6 +74,10 @@ func openStore(dir string, cfg *config) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if w := s.cfg.Window; w != nil && (len(s.cfg.Periods) != 1 || w.After > w.Before) {
+		err = errors.New("invalid export window")
+		return nil, err
+	}
 	s.journal, err = os.OpenFile(filepath.Join(dir, "pages.jsonl"), flags, 0600)
 	if err != nil {
 		return nil, err
@@ -200,7 +204,7 @@ func (s *store) publish(idx *index, state string, reason error) error {
 				To   string `json:"to,omitempty"`
 				Data any    `json:"data"`
 			}{FetchedAt: p.FetchedAt, Type: name, User: s.cfg.Profile.ID, query: q, Data: row}
-			if q.Period == "custom" {
+			if q.Period == customPeriod {
 				record.From = s.cfg.From
 				record.To = s.cfg.To
 			}
@@ -252,7 +256,11 @@ func (s *store) publish(idx *index, state string, reason error) error {
 	slices.SortFunc(rankings, func(a, b *summaryGroup) int { return cmp(a.Query, b.Query) })
 	slices.SortFunc(results, func(a, b *result) int { return cmp(a.Query, b.Query) })
 	ended := time.Now().UTC()
-	if err := writeJSON(s.dir, "summary.json", object{"profile": s.cfg.Profile, "started_at": s.cfg.Started, "exported_at": ended, "periods": s.cfg.Periods, "from": s.cfg.From, "to": s.cfg.To, "state": state, "coverage": coverage, "totals": totals, "rankings": rankings}); err != nil {
+	summary := object{"profile": s.cfg.Profile, "started_at": s.cfg.Started, "exported_at": ended, "periods": s.cfg.Periods, "from": s.cfg.From, "to": s.cfg.To, "state": state, "coverage": coverage, "totals": totals, "rankings": rankings}
+	if s.cfg.Window != nil {
+		summary["window"] = s.cfg.Window
+	}
+	if err := writeJSON(s.dir, "summary.json", summary); err != nil {
 		return err
 	}
 	manifest := object{"version": 1, "session": s.cfg, "state": state, "finished_at": ended, "coverage": coverage, "rows": counts, "queries": results}

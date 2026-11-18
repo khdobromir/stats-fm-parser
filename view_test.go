@@ -84,3 +84,21 @@ func TestResultRemainsUntilExit(t *testing.T) {
 		}
 	}
 }
+
+func TestChoosePeriod(t *testing.T) {
+	m := ui{width: 40, height: 15}
+	m.Update(tea.PasteMsg{Content: "volt"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	for _, label := range []string{"За неделю", "За 4 недели", "За 6 месяцев", "За текущий год", "Свои даты"} {
+		m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		view := ansi.Strip(m.View().Content)
+		if !strings.Contains(view, label) {
+			t.Fatalf("missing selected option %q in %q", label, view)
+		}
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.Update(tea.PasteMsg{Content: "2026-01-01"})
+	if m.o.from != "2026-01-01" {
+		t.Fatal("Enter on custom period should focus the start date")
+	}
+}

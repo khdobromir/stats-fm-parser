@@ -40,7 +40,7 @@ func operation(q query) string {
 	case "recaps":
 		title = "Ретроспективы"
 	}
-	if p := map[string]string{"today": "сегодня", "days": "последние дни", "weeks": "4 недели", "months": "6 месяцев", "lifetime": "весь период", "custom": "свои даты"}[q.Period]; p != "" {
+	if p := map[string]string{"week": "7 дней", "ytd": "с начала года", "today": "сегодня", "days": "последние дни", "weeks": "4 недели", "months": "6 месяцев", "lifetime": "весь период", "custom": "свои даты"}[q.Period]; p != "" {
 		title += " · " + p
 	}
 	if o := map[string]string{"COUNT": "по прослушиваниям", "TIME": "по времени", "SPOTIFY": "Spotify", "APPLEMUSIC": "Apple Music", "default": "по умолчанию"}[q.Order]; o != "" {
@@ -65,8 +65,8 @@ func (m *ui) form(w, h int) []string {
 		fw = (w - 4) * 3 / 5
 	}
 	lines := []string{m.heading("Профиль", fw), ""}
-	labels := []string{"Пользователь", "С даты", "По дату"}
-	values := []string{m.o.user, m.o.from, m.o.to}
+	labels := []string{"Пользователь", "Период", "С даты", "По дату"}
+	values := []string{m.o.user, periodChoices[m.selected].label, m.o.from, m.o.to}[:m.lastField()+1]
 	for i, val := range values {
 		if h < 8 && i != m.field {
 			continue
@@ -78,7 +78,7 @@ func (m *ui) form(w, h int) []string {
 		}
 		label := prefix + labels[i] + "  "
 		if val == "" {
-			val = []string{"username", "YYYY-MM-DD", "YYYY-MM-DD"}[i]
+			val = []string{"username", "", "YYYY-MM-DD", "YYYY-MM-DD"}[i]
 		}
 		val = cleanText(val)
 		if active {
@@ -86,7 +86,11 @@ func (m *ui) form(w, h int) []string {
 			if n := ansi.StringWidth(val); n > width {
 				val = ansi.TruncateLeft(val, n-width, "")
 			}
-			line := pad(label+val+"▏", fw)
+			input := val + "▏"
+			if i == 1 {
+				input = "‹ " + val + " ›"
+			}
+			line := pad(label+input, fw)
 			lines = append(lines, m.colors.paint("selection", m.colors.paint("accent", line)))
 			if m.note != "" {
 				lines = append(lines, strings.Split(ansi.Wrap(m.colors.paint("red", "! "+m.note), fw, ""), "\n")...)
@@ -95,23 +99,20 @@ func (m *ui) form(w, h int) []string {
 			lines = append(lines, fit(m.colors.paint("muted", label)+m.colors.paint("foreground", val), fw))
 		}
 	}
-	details := []string{m.heading("Выгрузка", w-fw-4), "", "Треки · Исполнители · Альбомы · Жанры", "История, статистика и ретроспективы", "", "Все стандартные периоды"}
-	if m.o.from != "" || m.o.to != "" {
-		details = append(details, cleanText(m.o.from)+" → "+cleanText(m.o.to)+" UTC")
-	} else {
-		details = append(details, "Свои даты — по желанию (UTC)")
+	details := []string{m.heading("Выгрузка", w-fw-4), "", "Треки · Исполнители · Альбомы · Жанры", "История и статистика"}
+	if m.o.period == "" {
+		details[3] += " · Ретроспективы"
+	}
+	if m.o.period == customPeriod {
+		details = append(details, "Даты включительно (UTC)")
 	}
 	if !wide {
-		if h >= len(lines)+8 {
+		if h >= len(lines)+len(details)+1 {
 			details[0] = m.heading("Выгрузка", w)
 			lines = append(lines, "")
 			lines = append(lines, details...)
-		} else if h >= len(lines)+3 {
-			period := "Все стандартные"
-			if m.o.from != "" || m.o.to != "" {
-				period += " + " + details[len(details)-1]
-			}
-			lines = append(lines, "", m.heading("Периоды", w), period)
+		} else if m.o.period == customPeriod && h > len(lines) {
+			lines = append(lines, "Даты включительно (UTC)")
 		}
 		return lines
 	}
@@ -182,8 +183,14 @@ func (m *ui) View() tea.View {
 	if contentW < 42 {
 		keys = "Tab поле · Enter далее · Esc выход"
 	}
-	if m.field == 2 {
+	if m.field == m.lastField() {
 		keys = strings.Replace(keys, "далее", "старт", 1)
+	}
+	if m.field == 1 {
+		keys = "←→ период · Enter далее · Esc выход"
+		if m.lastField() == 1 {
+			keys = strings.Replace(keys, "далее", "старт", 1)
+		}
 	}
 	var body []string
 	switch {

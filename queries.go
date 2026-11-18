@@ -12,11 +12,12 @@ import (
 )
 
 type config struct {
-	Profile profile   `json:"profile"`
-	Periods []string  `json:"periods"`
-	From    string    `json:"from,omitempty"`
-	To      string    `json:"to,omitempty"`
-	Started time.Time `json:"started_at"`
+	Profile profile     `json:"profile"`
+	Periods []string    `json:"periods"`
+	From    string      `json:"from,omitempty"`
+	To      string      `json:"to,omitempty"`
+	Started time.Time   `json:"started_at"`
+	Window  *dateWindow `json:"window,omitempty"`
 }
 
 func dateBounds(from, to string) (time.Time, time.Time, error) {
@@ -54,7 +55,10 @@ func (q query) paged() bool {
 }
 func (q query) params(c config) url.Values {
 	v := url.Values{}
-	if q.Period == "custom" {
+	if c.Window != nil {
+		v.Set("after", strconv.FormatInt(c.Window.After, 10))
+		v.Set("before", strconv.FormatInt(c.Window.Before, 10))
+	} else if q.Period == customPeriod {
 		a, b, _ := dateBounds(c.From, c.To)
 		v.Set("after", strconv.FormatInt(a.UnixMilli(), 10))
 		v.Set("before", strconv.FormatInt(b.UnixMilli(), 10))
@@ -83,7 +87,9 @@ func queries(c config, e entity) []query {
 
 	case "artists":
 		tops = []string{"artists/" + e.id + "/tracks", "artists/" + e.id + "/albums"}
-		add("recaps/artist/" + e.id)
+		if c.Window == nil {
+			add("recaps/artist/" + e.id)
+		}
 	case "albums":
 		tops = []string{"albums/" + e.id + "/tracks"}
 	}
@@ -93,6 +99,9 @@ func queries(c config, e entity) []query {
 	for _, p := range c.Periods {
 		for _, s := range tops {
 			for _, order := range c.Profile.Orders {
+				if c.Window != nil && order != "COUNT" && order != "TIME" {
+					continue
+				}
 				if (order == "SPOTIFY" || order == "APPLEMUSIC") && (p == "custom" || p == "today" || p == "days") {
 					continue
 				}
@@ -103,12 +112,16 @@ func queries(c config, e entity) []query {
 			out = append(out, query{Path: streamPath + suffix, Period: p})
 		}
 	}
-	if e.kind == "" {
+	if e.kind == "" && c.Window == nil {
 		for _, s := range []string{"streams/current", "streams/recent", "records/artists", "recaps/weekly", "recaps/monthly", "recaps/seasonal", "recaps/yearly", "recaps/artist", "recaps/time-capsule"} {
 			add(s)
 		}
 	}
-	add(streamPath)
+	if c.Window != nil {
+		out = append(out, query{Path: streamPath, Period: c.Periods[0]})
+	} else {
+		add(streamPath)
+	}
 	return out
 }
 func entityID(v any) string {

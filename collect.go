@@ -131,12 +131,18 @@ const pageSize = 100
 func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (page, error) {
 	p := page{Query: q, Status: "complete", Offset: r.Offset, Before: r.Before}
 	v := q.params(cfg)
+	before := cfg.Started.UnixMilli()
+	if cfg.Window != nil {
+		before = min(before, cfg.Window.Before)
+	}
 	if q.paged() {
 		v.Set("limit", strconv.Itoa(pageSize))
 		if q.history() {
-			before := r.Before
-			if before == 0 {
-				before = cfg.Started.UnixMilli()
+			if r.Before != 0 {
+				before = min(before, r.Before)
+			}
+			if cfg.Window != nil && before < cfg.Window.After {
+				return p, nil
 			}
 			v.Set("before", strconv.FormatInt(before, 10))
 			v.Set("order", "desc")
@@ -182,16 +188,24 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 		return p, nil
 	}
 	oldest := int64(0)
+	reachedStart := false
 	for _, row := range rows {
 		if q.history() {
 			ms := streamMillis(row)
 			if ms <= 0 {
 				p.Status = "partial"
 				p.Note = "missing or invalid endTime"
+				if cfg.Window != nil {
+					continue
+				}
 			} else {
-				if (r.Before != 0 && ms > r.Before) || ms > cfg.Started.UnixMilli() {
+				if ms > before {
 					p.Status = "partial"
 					p.Note = "API ignored the time cursor"
+					continue
+				}
+				if cfg.Window != nil && ms < cfg.Window.After {
+					reachedStart = true
 					continue
 				}
 				if oldest == 0 || ms < oldest {
@@ -203,7 +217,7 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 			p.Rows = append(p.Rows, row)
 		}
 	}
-	if p.Status == "partial" {
+	if p.Status == "partial" || reachedStart {
 		return p, nil
 	}
 	if q.history() {

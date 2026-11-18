@@ -17,11 +17,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-type options struct{ user, from, to, out, resume string }
+type options struct{ user, period, from, to, out, resume string }
 
 func (o options) validate() error {
 	if o.resume != "" {
-		if o.user != "" || o.from != "" || o.to != "" {
+		if o.user != "" || o.period != "" || o.from != "" || o.to != "" {
 			return errors.New("-resume uses the original username and dates")
 		}
 		return nil
@@ -29,7 +29,16 @@ func (o options) validate() error {
 	if !safeSegment(o.user) {
 		return errors.New("введите username из профиля stats.fm")
 	}
-	if o.from != "" || o.to != "" {
+	switch o.period {
+	case "", customPeriod:
+	case "week", "weeks", "months", "ytd":
+		if o.from != "" || o.to != "" {
+			return errors.New("-from and -to cannot be combined with this preset")
+		}
+	default:
+		return fmt.Errorf("неизвестный период %q", o.period)
+	}
+	if o.period == customPeriod || o.from != "" || o.to != "" {
 		_, _, err := dateBounds(o.from, o.to)
 		return err
 	}
@@ -55,11 +64,8 @@ func export(ctx context.Context, c *client, o options, report func(update)) (str
 		if err != nil {
 			return "", err
 		}
-		periods := []string{"today", "days", "weeks", "months", "lifetime"}
-		if o.from != "" {
-			periods = append(periods, "custom")
-		}
-		cfg = &config{p, periods, o.from, o.to, time.Now().UTC()}
+		selected := o.exportConfig(p, time.Now())
+		cfg = &selected
 		if err = os.MkdirAll(o.out, 0700); err != nil {
 			return "", err
 		}
@@ -112,7 +118,7 @@ type ui struct {
 	width, height, scroll int
 	colors                palette
 	o                     options
-	field                 int
+	field, selected       int
 	running               bool
 	note                  string
 	latest                update
@@ -120,6 +126,13 @@ type ui struct {
 	cancel                context.CancelFunc
 	c                     *client
 	ctx                   context.Context
+}
+
+func (m *ui) lastField() int {
+	if m.o.period == customPeriod {
+		return 3
+	}
+	return 1
 }
 
 func (m *ui) Init() tea.Cmd   { return nil }
@@ -161,29 +174,43 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.running {
 			return m, nil
 		}
-		fields := []*string{&m.o.user, &m.o.from, &m.o.to}
+		fields := []*string{&m.o.user, nil, &m.o.from, &m.o.to}
 		switch x.String() {
 		case "up", "shift+tab":
 			m.note = ""
-			m.field = (m.field + 2) % 3
+			m.field = (m.field + m.lastField()) % (m.lastField() + 1)
 		case "down", "tab":
 			m.note = ""
-			m.field = (m.field + 1) % 3
+			m.field = (m.field + 1) % (m.lastField() + 1)
+		case "left", "right":
+			if m.field == 1 {
+				delta := 1
+				if x.String() == "left" {
+					delta = -1
+				}
+				m.selected = (m.selected + delta + len(periodChoices)) % len(periodChoices)
+				m.o.period = periodChoices[m.selected].key
+				m.note = ""
+			}
 		case "enter":
-			if m.field < 2 {
+			if m.field < m.lastField() {
 				m.note = ""
 				m.field++
 				return m, nil
 			}
-			if err := m.o.validate(); err != nil {
+			o := m.o
+			if o.period != customPeriod {
+				o.from, o.to = "", ""
+			}
+			if err := o.validate(); err != nil {
 				m.note = err.Error()
 				switch {
 				case !safeSegment(m.o.user):
 					m.field = 0
 				case !validDate(m.o.from):
-					m.field = 1
-				default:
 					m.field = 2
+				default:
+					m.field = 3
 				}
 				return m, nil
 			}
@@ -191,7 +218,7 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel = cancel
 			m.running = true
 			m.note = ""
-			c, o, ch := m.c, m.o, m.events
+			c, ch := m.c, m.events
 			return m, tea.Batch(m.listen, func() tea.Msg {
 				var final update
 				dir, err := export(ctx, c, o, func(u update) {
@@ -206,21 +233,24 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return nil
 			})
 		case "backspace":
+			if m.field == 1 {
+				return m, nil
+			}
 			m.note = ""
 			r := []rune(*fields[m.field])
 			if len(r) > 0 {
 				*fields[m.field] = string(r[:len(r)-1])
 			}
 		default:
-			if x.Text != "" {
+			if m.field != 1 && x.Text != "" {
 				m.note = ""
 				*fields[m.field] += cleanText(x.Text)
 			}
 		}
 	case tea.PasteMsg:
-		if !m.running && !m.latest.done {
+		if !m.running && !m.latest.done && m.field != 1 {
 			m.note = ""
-			fields := []*string{&m.o.user, &m.o.from, &m.o.to}
+			fields := []*string{&m.o.user, nil, &m.o.from, &m.o.to}
 			*fields[m.field] += cleanText(x.Content)
 		}
 	}
@@ -238,6 +268,7 @@ func cleanText(s string) string {
 func run() error {
 	var o options
 	flag.StringVar(&o.user, "user", "", "stats.fm username (batch mode)")
+	flag.StringVar(&o.period, "period", "", "export period: week, weeks, months, ytd, custom")
 	flag.StringVar(&o.from, "from", "", "first UTC date, YYYY-MM-DD")
 	flag.StringVar(&o.to, "to", "", "last UTC date, YYYY-MM-DD")
 	flag.StringVar(&o.out, "out", "exports", "parent directory for new exports")
@@ -251,7 +282,7 @@ func run() error {
 	c := &client{base: apiBase, http: &http.Client{Timeout: 45 * time.Second}, pace: 200 * time.Millisecond}
 	var dir string
 	var err error
-	if o.user != "" || o.resume != "" {
+	if o.user != "" || o.resume != "" || o.period != "" {
 		last := time.Time{}
 		dir, err = export(ctx, c, o, func(u update) {
 			if u.p.Path == "" || time.Since(last) > 2*time.Second {
