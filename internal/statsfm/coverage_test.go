@@ -141,7 +141,7 @@ func TestVersionedHistoryCoverage(t *testing.T) {
 				}
 				return
 			}
-			if manifest.Version != 2 || hits["/users/name"] != 1 || hits["/tracks/list"] != 1 || hits["/tracks/1"] != 0 {
+			if manifest.Version != 3 || hits["/users/name"] != 1 || hits["/tracks/list"] != 1 || hits["/tracks/1"] != 0 {
 				t.Errorf("version %d, hits %v", manifest.Version, hits)
 			}
 			if mode == "complete" {
@@ -202,8 +202,9 @@ func TestVersionedHistoryCoverage(t *testing.T) {
 }
 
 func TestHistoryCursorAtSessionBoundary(t *testing.T) {
-	for _, count := range []int{1, pageSize} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
+	for _, tc := range []struct{ version, count int }{{2, 1}, {2, pageSize}, {3, 1}, {3, pageSize}} {
+		version, count := tc.version, tc.count
+		t.Run(fmt.Sprintf("v%d/%d", version, count), func(t *testing.T) {
 			started := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
 			var mu sync.Mutex
 			var requested []string
@@ -222,7 +223,7 @@ func TestHistoryCursorAtSessionBoundary(t *testing.T) {
 			}))
 			defer server.Close()
 			c := &client{base: server.URL + "/users/", http: server.Client()}
-			cfg := config{Version: 2, Profile: profile{ID: "id"}, Started: started}
+			cfg := config{Version: version, Profile: profile{ID: "id"}, Started: started}
 			idx := newIndex()
 			q := query{Path: "streams"}
 			r := &result{}

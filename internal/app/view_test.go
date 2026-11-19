@@ -129,3 +129,26 @@ func TestSpotifyForm(t *testing.T) {
 		t.Fatal("draft lost when switching sources")
 	}
 }
+
+func TestHistoryModeAndUpdateForm(t *testing.T) {
+	m := ui{width: 85, height: 24}
+	if !strings.Contains(m.View().Content, "История и метаданные") {
+		t.Fatal("history mode should be the default")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF4})
+	if m.o.Mode != "full" || !strings.Contains(m.View().Content, "Полный экспорт") {
+		t.Fatal("F4 should select full mode")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF3})
+	if !strings.Contains(m.View().Content, "Обновить архив") {
+		t.Fatal("F3 should open the update form")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.running || !strings.Contains(m.View().Content, "Укажите путь") {
+		t.Fatal("the archive path is required")
+	}
+	m.Update(tea.PasteMsg{Content: "/tmp/history"})
+	if m.archivePath != "/tmp/history" {
+		t.Fatal(m.archivePath)
+	}
+}

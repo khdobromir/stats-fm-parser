@@ -11,7 +11,13 @@ import (
 	"time"
 )
 
+const currentVersion = 3
+const HistoryMode = "history"
+
 type config struct {
+	Mode    string      `json:"mode,omitempty"`
+	Base    string      `json:"base,omitempty"`
+	Scan    *dateWindow `json:"scan,omitempty"`
 	Version int         `json:"version,omitempty"`
 	Profile profile     `json:"profile"`
 	Periods []string    `json:"periods"`
@@ -33,9 +39,16 @@ func (c config) historyQuery() query {
 	return q
 }
 
+func (c config) scanWindow() *dateWindow {
+	if c.Scan != nil {
+		return c.Scan
+	}
+	return c.Window
+}
+
 func (c config) historyEnd() int64 {
-	if c.Window != nil {
-		return min(c.Started.UnixMilli(), c.Window.Before)
+	if w := c.scanWindow(); w != nil {
+		return min(c.Started.UnixMilli(), w.Before)
 	}
 	return c.Started.UnixMilli()
 }
@@ -106,9 +119,9 @@ func (q query) params(c config) url.Values {
 	if q.Path == "user" {
 		return v
 	}
-	if c.Window != nil {
-		v.Set("after", strconv.FormatInt(c.Window.After, 10))
-		v.Set("before", strconv.FormatInt(c.Window.Before, 10))
+	if window := c.scanWindow(); window != nil {
+		v.Set("after", strconv.FormatInt(window.After, 10))
+		v.Set("before", strconv.FormatInt(window.Before, 10))
 	} else if q.Period == CustomPeriod {
 		a, b, _ := dateBounds(c.From, c.To)
 		v.Set("after", strconv.FormatInt(a.UnixMilli(), 10))

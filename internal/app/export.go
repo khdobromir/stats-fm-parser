@@ -16,8 +16,9 @@ type options struct {
 
 func (o options) validate() error {
 	if o.spotifyLibrary != "" {
-		if o.User != "" || o.Period != "" || o.From != "" || o.To != "" || o.Resume != "" {
-			return errors.New("-spotify-library нельзя сочетать с -user, -period, -from, -to или -resume")
+		if o.User != "" || o.Period != "" || o.From != "" || o.To != "" || o.Resume != "" || o.Mode != "" ||
+			o.Update != "" || o.ImportHistory != "" || o.RefreshFrom != "" {
+			return errors.New("-spotify-library нельзя сочетать с параметрами экспорта stats.fm")
 		}
 		return nil
 	}

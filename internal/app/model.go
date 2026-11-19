@@ -20,6 +20,8 @@ type ui struct {
 	running               bool
 	spotify               bool
 	libraryPath           string
+	updating              bool
+	archivePath           string
 	note                  string
 	latest                update
 	events                chan update
@@ -78,9 +80,36 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if x.String() == "f2" {
 			m.spotify = !m.spotify
+			m.updating = false
 			m.note = ""
 			return m, nil
 		}
+		if x.String() == "f3" {
+			m.updating = !m.updating
+			m.spotify = false
+			m.note = ""
+			return m, nil
+		}
+		if m.updating {
+			switch x.String() {
+			case "enter":
+				if strings.TrimSpace(m.archivePath) == "" {
+					m.note = "Укажите путь к архиву истории"
+					return m, nil
+				}
+				return m, m.start(options{Options: statsfm.Options{Update: m.archivePath}})
+			case "backspace":
+				m.archivePath = withoutLastRune(m.archivePath)
+				m.note = ""
+			default:
+				m.archivePath += cleanText(x.Text)
+				if x.Text != "" {
+					m.note = ""
+				}
+			}
+			return m, nil
+		}
+
 		if m.spotify {
 			switch x.String() {
 			case "enter":
@@ -100,6 +129,15 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if x.String() == "f4" {
+			if m.o.Mode == "full" {
+				m.o.Mode = statsfm.HistoryMode
+			} else {
+				m.o.Mode = "full"
+			}
+			return m, nil
+		}
+
 		fields := []*string{&m.o.User, nil, &m.o.From, &m.o.To}
 		switch x.String() {
 		case "up", "shift+tab":
@@ -125,6 +163,9 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			o := m.o
+			if o.Mode == "" {
+				o.Mode = statsfm.HistoryMode
+			}
 			if o.Period != statsfm.CustomPeriod {
 				o.From, o.To = "", ""
 			}
@@ -154,7 +195,10 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.PasteMsg:
-		if !m.running && !m.latest.done && m.spotify {
+		if !m.running && !m.latest.done && m.updating {
+			m.archivePath += cleanText(x.Content)
+			m.note = ""
+		} else if !m.running && !m.latest.done && m.spotify {
 			m.libraryPath += cleanText(x.Content)
 			m.note = ""
 		} else if !m.running && !m.latest.done && m.field != 1 {

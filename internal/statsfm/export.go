@@ -12,14 +12,37 @@ import (
 	"stats-fm-parser/internal/exportfs"
 )
 
-type Options struct{ User, Period, From, To, Out, Resume string }
+type Options struct {
+	User, Period, From, To, Out, Resume      string
+	Mode, Update, RefreshFrom, ImportHistory string
+}
 
 func (o Options) Validate() error {
-	if o.Resume != "" {
-		if o.User != "" || o.Period != "" || o.From != "" || o.To != "" {
-			return errors.New("-resume uses the original username and dates")
+	operations := 0
+	for _, path := range []string{o.Resume, o.Update, o.ImportHistory} {
+		if path != "" {
+			operations++
+		}
+	}
+	if operations > 1 {
+		return errors.New("выберите одну операцию из -resume, -update и -import-history")
+	}
+	if o.RefreshFrom != "" {
+		if o.Update == "" {
+			return errors.New("-refresh-from требует -update")
+		}
+		if _, err := time.Parse(time.DateOnly, o.RefreshFrom); err != nil {
+			return fmt.Errorf("-refresh-from: %w", err)
+		}
+	}
+	if operations == 1 {
+		if o.User != "" || o.Period != "" || o.From != "" || o.To != "" || o.Mode != "" {
+			return errors.New("операция использует профиль, период и режим исходного экспорта")
 		}
 		return nil
+	}
+	if o.Mode != "" && o.Mode != "full" && o.Mode != HistoryMode {
+		return fmt.Errorf("неизвестный режим %q", o.Mode)
 	}
 	if err := ValidateUsername(o.User); err != nil {
 		return err
@@ -61,6 +84,15 @@ func (c *client) export(ctx context.Context, o Options, report func(Update)) (st
 	if err := o.Validate(); err != nil {
 		return "", err
 	}
+	if o.ImportHistory != "" {
+		return importArchive(ctx, o, report)
+	}
+	if o.Update != "" {
+		return c.archive(ctx, o.Update, o, nil, nil, report)
+	}
+	if o.Resume != "" && isArchive(o.Resume) {
+		return c.archive(ctx, o.Resume, o, nil, nil, report)
+	}
 	dir := o.Resume
 	var cfg *config
 	var profileResponse json.RawMessage
@@ -80,11 +112,17 @@ func (c *client) export(ctx context.Context, o Options, report func(Update)) (st
 			return "", err
 		}
 	}
+	if cfg != nil && cfg.Mode == HistoryMode {
+		return c.archive(ctx, dir, o, cfg, profileResponse, report)
+	}
 	s, err := openStore(dir, cfg)
 	if err != nil {
 		return dir, err
 	}
 	defer s.close()
+	if s.cfg.Mode == HistoryMode {
+		return dir, errors.New("для -resume укажите корневой каталог архива истории")
+	}
 	report(Update{Dir: dir})
 	idx := newIndex()
 	if err = s.replay(func(p page) error { idx.apply(p); return nil }); err != nil {

@@ -100,17 +100,21 @@ func (i *index) apply(p page) {
 				i.noteRankingMetadata(p.Query, row)
 			}
 		}
-		discover(row, "", func(e entity) {
-			if !i.discovered[e] {
-				i.discovered[e] = true
-				i.entities = append(i.entities, e)
-			}
-		})
+		i.discoverRow(row)
 	}
 	if p.Status != "running" {
 		r.seen = nil
 	}
 }
+func (i *index) discoverRow(row any) {
+	discover(row, "", func(e entity) {
+		if !i.discovered[e] {
+			i.discovered[e] = true
+			i.entities = append(i.entities, e)
+		}
+	})
+}
+
 func rowsFor(q query, v any, cfg config) ([]any, error) {
 	if v == nil {
 		return nil, nil
@@ -152,19 +156,32 @@ func streamMillis(row any) int64 {
 
 const pageSize = 100
 
+func (q query) pageLimit(cfg config) int {
+	if cfg.version() >= 3 {
+		switch q.Path {
+		case "streams":
+			return 1000
+		case "top/tracks":
+			return 500
+		}
+	}
+	return pageSize
+}
+
 func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (page, error) {
 	p := page{Query: q, Status: "complete", Offset: r.Offset, Before: r.Before}
 	v := q.params(cfg)
 	before := cfg.historyEnd()
+	window := cfg.scanWindow()
 	paged := q.paged() && (cfg.version() == 1 || q.Path != "streams/recent")
 
 	if paged {
-		v.Set("limit", strconv.Itoa(pageSize))
+		v.Set("limit", strconv.Itoa(q.pageLimit(cfg)))
 		if q.history() {
 			if r.Before != 0 {
 				before = min(before, r.Before)
 			}
-			if cfg.Window != nil && before < cfg.Window.After {
+			if window != nil && before < window.After {
 				if cfg.version() >= 2 && r.Count == 0 {
 					p.Status = "empty"
 				}
@@ -250,11 +267,15 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 	}
 	for _, row := range rows {
 		if q.history() {
+			if cfg.Mode == HistoryMode && streamID(row) == "" {
+				p.Status = "partial"
+				p.Note = "missing stream ID"
+			}
 			ms := streamMillis(row)
 			if ms <= 0 {
 				p.Status = "partial"
 				p.Note = "missing or invalid endTime"
-				if cfg.Window != nil {
+				if window != nil {
 					continue
 				}
 			} else {
@@ -268,7 +289,7 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 					p.Note = "API returned history out of time order"
 				}
 				previous = ms
-				if cfg.Window != nil && ms < cfg.Window.After {
+				if window != nil && ms < window.After {
 					reachedStart = true
 					continue
 				}
@@ -299,7 +320,8 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 		if cfg.version() >= 2 {
 			boundary = before
 		}
-		// An inclusive page that fills at a single millisecond cannot advance safely.
+		// A server-clamped page can look short at the enlarged limit. At a stuck
+		// boundary, only advance if it fits below the verified legacy limit.
 		if boundary != 0 && oldest == boundary {
 			if len(rows) >= pageSize {
 				p.Status = "partial"
@@ -324,69 +346,7 @@ func (c *client) fetch(ctx context.Context, cfg config, q query, r *result) (pag
 type Progress struct {
 	Path, Period, Order  string
 	Records, Done, Total int
-}
-
-func collect(ctx context.Context, c *client, s *store, idx *index, notify func(Progress)) error {
-	run := func(q query, done int) error {
-		for {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			r := idx.results[q]
-			if r == nil {
-				r = &result{Query: q}
-			} else if r.Status != "running" {
-				return nil
-			}
-			notify(Progress{Path: q.Path, Period: q.Period, Order: q.Order, Records: idx.count, Done: done, Total: len(idx.entities)})
-			var p page
-			var err error
-			if source := idx.reconstruct(s.cfg, q); source != nil {
-				p = page{Query: q, Status: "reconstructible", Source: source}
-			} else {
-				p, err = c.fetch(ctx, s.cfg, q, r)
-				if err != nil {
-					return fmt.Errorf("%s: %w", q.Path, err)
-				}
-			}
-			if err = s.append(p); err != nil {
-				return err
-			}
-			idx.apply(p)
-		}
-	}
-	if s.cfg.version() >= 2 {
-		if err := run(query{Path: "user"}, 0); err != nil {
-			return err
-		}
-	}
-	for _, q := range queries(s.cfg, entity{}) {
-		if err := run(q, 0); err != nil {
-			return err
-		}
-	}
-	for n := 0; n < len(idx.entities); n++ {
-		for _, q := range queries(s.cfg, idx.entities[n]) {
-			if err := run(q, n); err != nil {
-				return err
-			}
-		}
-	}
-	if s.cfg.version() >= 2 {
-		for _, q := range idx.metadataBatches() {
-			if err := run(q, len(idx.entities)); err != nil {
-				return err
-			}
-		}
-		for _, e := range idx.entities {
-			if !idx.metadata[e] {
-				if err := run(query{Path: e.kind + "/" + e.id}, len(idx.entities)); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	Streams              int
 }
 
 func compactRanking(q query, row any) object {

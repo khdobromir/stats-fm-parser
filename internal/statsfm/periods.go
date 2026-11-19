@@ -10,7 +10,13 @@ type dateWindow struct {
 }
 
 func (o Options) exportConfig(p profile, started time.Time) config {
-	cfg := config{Version: 2, Profile: p, Started: started.UTC(), From: o.From, To: o.To}
+	cfg := config{Version: currentVersion, Mode: o.Mode, Profile: p, Started: started.UTC(), From: o.From, To: o.To}
+	if cfg.Mode == "" {
+		cfg.Mode = "full"
+	}
+	if cfg.Mode == HistoryMode && o.Period == "" && o.From != "" {
+		o.Period = CustomPeriod
+	}
 	if o.Period == "" {
 		cfg.Periods = []string{"today", "days", "weeks", "months", "lifetime"}
 		if o.From != "" {

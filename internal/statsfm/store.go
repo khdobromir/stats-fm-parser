@@ -23,14 +23,37 @@ type store struct {
 	lock, journal *os.File
 }
 
-func openStore(dir string, cfg *config) (*store, error) {
+func lockDirectory(dir string, mode int) (*os.File, error) {
 	lock, err := os.Open(dir)
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := syscall.Flock(int(lock.Fd()), mode|syscall.LOCK_NB); err != nil {
 		lock.Close()
 		return nil, fmt.Errorf("export directory is locked: %w", err)
+	}
+	return lock, nil
+}
+
+func readConfig(dir string) (config, error) {
+	var cfg config
+	b, err := os.ReadFile(filepath.Join(dir, "session.json"))
+	if err != nil {
+		return cfg, err
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return cfg, err
+	}
+	if !safeSegment(cfg.Profile.ID) || cfg.Started.IsZero() || len(cfg.Periods) == 0 {
+		return cfg, errors.New("invalid export session")
+	}
+	return cfg, nil
+}
+
+func openStore(dir string, cfg *config) (*store, error) {
+	lock, err := lockDirectory(dir, syscall.LOCK_EX)
+	if err != nil {
+		return nil, err
 	}
 	s := &store{dir: dir, lock: lock}
 	defer func() {
@@ -44,19 +67,12 @@ func openStore(dir string, cfg *config) (*store, error) {
 		flags |= os.O_CREATE | os.O_EXCL
 		err = exportfs.WriteJSON(dir, "session.json", s.cfg)
 	} else {
-		var b []byte
-		b, err = os.ReadFile(filepath.Join(dir, "session.json"))
-		if err == nil {
-			err = json.Unmarshal(b, &s.cfg)
-		}
-		if err == nil && (!safeSegment(s.cfg.Profile.ID) || s.cfg.Started.IsZero() || len(s.cfg.Periods) == 0) {
-			err = errors.New("invalid export session")
-		}
+		s.cfg, err = readConfig(dir)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if s.cfg.Version < 0 || s.cfg.Version > 2 {
+	if s.cfg.Version < 0 || s.cfg.Version > currentVersion {
 		err = fmt.Errorf("unsupported stats.fm export version %d", s.cfg.Version)
 		return nil, err
 	}
@@ -89,36 +105,52 @@ func (s *store) replay(visit func(page) error) error {
 	if _, err := s.journal.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	rd := bufio.NewReader(s.journal)
+	offset, err := walkPages(s.journal, visit)
+	if err != nil {
+		return err
+	}
+	if err := s.journal.Truncate(offset); err != nil {
+		return err
+	}
+	_, err = s.journal.Seek(0, io.SeekEnd)
+	return err
+}
+
+func walkPages(in io.Reader, visit func(page) error) (int64, error) {
+	rd := bufio.NewReader(in)
 	var offset int64
 	for {
 		b, err := rd.ReadBytes('\n')
 		if err == io.EOF {
-			if len(b) > 0 {
-				if err = s.journal.Truncate(offset); err != nil {
-					return err
-				}
-			}
-			_, err = s.journal.Seek(0, io.SeekEnd)
-			return err
+			return offset, nil
 		}
 		if err != nil {
-			return err
+			return offset, err
 		}
 		var p page
 		dec := json.NewDecoder(bytes.NewReader(b))
 		dec.UseNumber()
 		if !json.Valid(b) {
-			return fmt.Errorf("corrupt journal at byte %d", offset)
+			return offset, fmt.Errorf("corrupt journal at byte %d", offset)
 		}
-		if err = dec.Decode(&p); err != nil {
-			return err
+		if err := dec.Decode(&p); err != nil {
+			return offset, err
 		}
-		if err = visit(p); err != nil {
-			return err
+		if err := visit(p); err != nil {
+			return offset, err
 		}
 		offset += int64(len(b))
 	}
+}
+
+type exportRow struct {
+	FetchedAt time.Time `json:"fetched_at"`
+	Type      string    `json:"type"`
+	User      string    `json:"user_id"`
+	query
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+	Data any    `json:"data"`
 }
 
 type summaryGroup struct {
@@ -128,6 +160,10 @@ type summaryGroup struct {
 }
 
 func (s *store) publish(idx *index, state string, reason error) error {
+	return s.publishFrom(idx, state, reason, s.replay)
+}
+
+func (s *store) publishFrom(idx *index, state string, reason error, replay func(func(page) error) error) error {
 	groups := map[query]*summaryGroup{}
 	totals := map[string]any{}
 	counts := map[string]int{}
@@ -159,7 +195,7 @@ func (s *store) publish(idx *index, state string, reason error) error {
 		encoders[name] = json.NewEncoder(writers[name])
 		counts[name] = 0
 	}
-	err = s.replay(func(p page) error {
+	err = replay(func(p page) error {
 		q := p.Query
 		name := q.outputFile(s.cfg)
 		general := name == "rankings" && strings.Count(q.Path, "/") == 1
@@ -185,15 +221,7 @@ func (s *store) publish(idx *index, state string, reason error) error {
 			if q.Path == "streams/stats" {
 				totals[q.Period] = row
 			}
-			record := struct {
-				FetchedAt time.Time `json:"fetched_at"`
-				Type      string    `json:"type"`
-				User      string    `json:"user_id"`
-				query
-				From string `json:"from,omitempty"`
-				To   string `json:"to,omitempty"`
-				Data any    `json:"data"`
-			}{FetchedAt: p.FetchedAt, Type: name, User: s.cfg.Profile.ID, query: q, Data: row}
+			record := exportRow{FetchedAt: p.FetchedAt, Type: name, User: s.cfg.Profile.ID, query: q, Data: row}
 			if q.Period == CustomPeriod {
 				record.From = s.cfg.From
 				record.To = s.cfg.To
@@ -257,6 +285,16 @@ func (s *store) publish(idx *index, state string, reason error) error {
 		return err
 	}
 	manifest := object{"version": s.cfg.version(), "session": s.cfg, "state": state, "finished_at": ended, "coverage": coverage, "rows": counts, "queries": results}
+	if s.cfg.Mode == HistoryMode {
+		manifest["sync_through"] = s.cfg.historyEnd()
+		missing := []object{}
+		for _, e := range idx.entities {
+			if !idx.metadata[e] {
+				missing = append(missing, object{"kind": e.kind, "id": e.id})
+			}
+		}
+		manifest["missing_metadata"] = missing
+	}
 	if reason != nil {
 		manifest["reason"] = reason.Error()
 	}

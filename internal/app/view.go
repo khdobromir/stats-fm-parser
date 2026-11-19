@@ -37,6 +37,12 @@ func operation(q statsfm.Progress) string {
 		case "per-day":
 			title = "Статистика по дням"
 		}
+	case "tracks", "albums", "artists":
+		if len(parts) <= 2 {
+			title = "Метаданные каталога"
+		} else {
+			title = "Место среди слушателей"
+		}
 	case "records":
 		title = "Рекорды исполнителей"
 	case "recaps":
@@ -101,10 +107,12 @@ func (m *ui) form(w, h int) []string {
 			lines = append(lines, fit(m.colors.paint("muted", label)+m.colors.paint("foreground", val), fw))
 		}
 	}
-	details := []string{m.heading("Выгрузка", w-fw-4), "", "Треки · Исполнители · Альбомы · Жанры", "История и статистика"}
-	if m.o.Period == "" {
-		details[3] += " · Ретроспективы"
+	mode := "История и метаданные"
+	if m.o.Mode == "full" {
+		mode = "Полный экспорт"
 	}
+	details := []string{m.heading("Режим · F4", w-fw-4), mode}
+
 	if m.o.Period == statsfm.CustomPeriod {
 		details = append(details, "Даты включительно (UTC)")
 	}
@@ -113,8 +121,8 @@ func (m *ui) form(w, h int) []string {
 			details[0] = m.heading("Выгрузка", w)
 			lines = append(lines, "")
 			lines = append(lines, details...)
-		} else if m.o.Period == statsfm.CustomPeriod && h > len(lines) {
-			lines = append(lines, "Даты включительно (UTC)")
+		} else if h > len(lines) {
+			lines = append(lines, mode+" · F4")
 		}
 		return lines
 	}
@@ -183,17 +191,16 @@ func (m *ui) contentWidth() int {
 	}
 	return max(1, min(m.width-2*margin, 112))
 }
-func (m *ui) spotifyForm(w int) []string {
-	path := m.libraryPath
+func (m *ui) pathForm(w int, title, path, placeholder string) []string {
 	if path == "" {
-		path = "ZIP или YourLibrary.json"
+		path = placeholder
 	}
 	width := max(1, w-9)
 	if n := ansi.StringWidth(path); n > width {
 		path = ansi.TruncateLeft(path, n-width+1, "…")
 	}
 	lines := []string{
-		m.heading("Любимые треки", w),
+		m.heading(title, w),
 		m.colors.paint("selection", m.colors.paint("accent", pad("› Путь  "+path+"▏", w))),
 	}
 	if m.note != "" {
@@ -206,15 +213,15 @@ func (m *ui) View() tea.View {
 	w, h := max(1, m.width), max(1, m.height)
 	contentW := m.contentWidth()
 	left := strings.Repeat(" ", (w-contentW)/2)
-	title, keys := "Новый экспорт", "F2 Spotify · Tab поле · Enter далее · Esc выход"
+	title, keys := "Новый экспорт", "F2 Spotify · F3 обновить · F4 режим · Enter далее · Esc выход"
 	if contentW < 42 {
-		keys = "F2 Spotify · Enter далее · Esc"
+		keys = "F3 архив · F4 режим · Enter далее"
 	}
 	if m.field == m.lastField() {
 		keys = strings.Replace(keys, "далее", "старт", 1)
 	}
 	if m.field == 1 {
-		keys = "F2 Spotify · ←→ период · Enter · Esc"
+		keys = "←→ период · F3 архив · F4 режим · Enter"
 	}
 	var body []string
 	brand := "▂▄▆  stats.fm"
@@ -233,13 +240,20 @@ func (m *ui) View() tea.View {
 		p := m.latest.Progress
 		body = []string{m.heading("Текущая операция", contentW)}
 		body = append(body, strings.Split(ansi.Wrap(m.colors.paint("accent", operation(p)), contentW, ""), "\n")...)
-		body = append(body, "", fmt.Sprintf("Записей     %s", m.colors.paint("accent", fmt.Sprint(p.Records))), fmt.Sprintf("Объектов    %d из %d", p.Done, p.Total))
+		if m.updating || m.o.Mode == statsfm.HistoryMode {
+			body = append(body, "", fmt.Sprintf("Прослушиваний    %d", p.Streams))
+		} else {
+			body = append(body, "", fmt.Sprintf("Записей     %s", m.colors.paint("accent", fmt.Sprint(p.Records))), fmt.Sprintf("Объектов    %d из %d", p.Done, p.Total))
+		}
 		if m.note != "" {
 			body = append(body, m.colors.paint("yellow", m.note))
 		}
 	case m.spotify:
 		title, keys = "Новый экспорт", "F2 stats.fm · Enter старт · Esc"
-		body = m.spotifyForm(contentW)
+		body = m.pathForm(contentW, "Любимые треки", m.libraryPath, "ZIP или YourLibrary.json")
+	case m.updating:
+		title, keys = "Обновление архива", "F3 новый экспорт · Enter старт · Esc"
+		body = m.pathForm(contentW, "Обновить архив", m.archivePath, "Папка архива истории")
 	default:
 		body = m.form(contentW, h-4)
 	}

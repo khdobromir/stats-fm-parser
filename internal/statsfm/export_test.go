@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,6 +91,10 @@ func TestExportResume(t *testing.T) {
 	if !strings.Contains(string(readOutput(t, dir, "manifest.json")), `"state":"interrupted"`) {
 		t.Fatal("missing interruption")
 	}
+	mu.Lock()
+	hitsBeforeResume := maps.Clone(hits)
+	mu.Unlock()
+	journalBeforeResume := string(readOutput(t, dir, "pages.jsonl"))
 	// Simulate a process killed in the middle of the next journal entry.
 	f, err := os.OpenFile(filepath.Join(dir, "pages.jsonl"), os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
@@ -130,13 +135,18 @@ func TestExportResume(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if hits["/name"] != 1 || hits["/id/top/tracks?limit=100&offset=0&orderBy=COUNT&range=today"] != 2 {
+	if hits["/name"] != 1 || hits["/id/top/tracks?limit=500&offset=0&orderBy=COUNT&range=today"] != 2 {
 		t.Fatal("completed request was repeated after resume")
 	}
 	for _, path := range []string{"/id/profile", "/id/privacy", "/id/friends", "/id/friends/count", "/id/achievements/completed",
 		"/id/achievements/uncompleted", "/id/streams/recent", "/id/recaps/time-capsule", "/id/records/artists", "/tracks/9007199254740993/top/listeners/place/id"} {
-		if hits[path] != 1 {
-			t.Errorf("public query %s: %d requests", path, hits[path])
+		method := strings.TrimPrefix(path, "/id/")
+		if !strings.HasPrefix(path, "/id/") {
+			method = strings.TrimSuffix(strings.TrimPrefix(path, "/"), "/id")
+		}
+		committed := strings.Contains(journalBeforeResume, `"method":"`+method+`"`)
+		if committed && hits[path] != hitsBeforeResume[path] || hits[path] < 1 || hits[path] > 2 {
+			t.Errorf("public query %s: %d requests, committed before resume %v", path, hits[path], committed)
 		}
 	}
 	stats := string(readOutput(t, dir, "statistics.jsonl"))

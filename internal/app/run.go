@@ -12,6 +12,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"stats-fm-parser/internal/statsfm"
 )
 
 func Run() error {
@@ -23,15 +25,22 @@ func Run() error {
 	flag.StringVar(&o.Out, "out", "exports", "parent directory for new exports")
 	flag.StringVar(&o.spotifyLibrary, "spotify-library", "", "export Liked Songs from a Spotify Account data ZIP or YourLibrary.json")
 	flag.StringVar(&o.Resume, "resume", "", "resume a saved export directory")
+	flag.StringVar(&o.Mode, "mode", "", "stats.fm export mode: history or full (default)")
+	flag.StringVar(&o.Update, "update", "", "update a stats.fm history archive in place")
+	flag.StringVar(&o.RefreshFrom, "refresh-from", "", "also refresh older history from this UTC date (requires -update)")
+	flag.StringVar(&o.ImportHistory, "import-history", "", "copy a v1/v2 stats.fm history into a new archive")
 	flag.Parse()
-	var spotifyFlag bool
+	var emptyFlag string
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "spotify-library" {
-			spotifyFlag = true
+		switch f.Name {
+		case "spotify-library", "resume", "update", "import-history", "mode", "refresh-from":
+			if f.Value.String() == "" {
+				emptyFlag = f.Name
+			}
 		}
 	})
-	if spotifyFlag && o.spotifyLibrary == "" {
-		return errors.New("укажите путь после -spotify-library")
+	if emptyFlag != "" {
+		return fmt.Errorf("укажите значение после -%s", emptyFlag)
 	}
 	if flag.NArg() != 0 {
 		return errors.New("use -user USERNAME or run without arguments for the TUI")
@@ -40,7 +49,8 @@ func Run() error {
 	defer stop()
 	var dir string
 	var err error
-	if o.spotifyLibrary != "" || o.User != "" || o.Resume != "" || o.Period != "" {
+	if o.spotifyLibrary != "" || o.User != "" || o.Resume != "" || o.Period != "" || o.Mode != "" ||
+		o.Update != "" || o.ImportHistory != "" || o.RefreshFrom != "" || o.From != "" || o.To != "" {
 		last := time.Time{}
 		dir, err = export(ctx, o, func(u update) {
 			if u.file != "" {
@@ -53,6 +63,7 @@ func Run() error {
 			}
 		})
 	} else {
+		o.Mode = statsfm.HistoryMode
 		m := &ui{colors: loadPalette(ctx), o: o, ctx: ctx, events: make(chan update, 1)}
 		_, err = tea.NewProgram(m).Run()
 		if m.cancel != nil {

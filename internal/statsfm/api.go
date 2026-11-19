@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,10 +21,13 @@ const apiBase = "https://api.stats.fm/api/v1/users/"
 
 type object = map[string]any
 type client struct {
-	base string
-	http *http.Client
-	pace time.Duration
-	last time.Time
+	base              string
+	http              *http.Client
+	pace              time.Duration
+	mu                sync.Mutex
+	next, cooldown    time.Time
+	requests, limited int
+	workers           int
 }
 
 type apiError struct {
@@ -55,6 +59,28 @@ func retryDelay(header string, fallback time.Duration) time.Duration {
 	}
 	return fallback
 }
+func (c *client) waitForRequest(ctx context.Context) error {
+	for {
+		c.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		now := time.Now()
+		delay := max(c.next.Sub(now), c.cooldown.Sub(now))
+		if delay <= 0 {
+			c.next = now.Add(c.pace)
+			c.requests++
+			c.mu.Unlock()
+			return nil
+		}
+		c.mu.Unlock()
+		if err := wait(ctx, delay); err != nil {
+			return err
+		}
+	}
+}
+
 func (c *client) get(ctx context.Context, target string, q url.Values) (json.RawMessage, error) {
 	if len(q) > 0 {
 		target += "?" + q.Encode()
@@ -66,13 +92,22 @@ func (c *client) get(ctx context.Context, target string, q url.Values) (json.Raw
 	req.Header.Set("User-Agent", "stats-fm-export/1.0")
 	req.Header.Set("Accept", "application/json")
 	for attempt := 0; ; attempt++ {
-		if err := wait(ctx, time.Until(c.last.Add(c.pace))); err != nil {
+		if err := c.waitForRequest(ctx); err != nil {
 			return nil, err
 		}
-		c.last = time.Now()
 		resp, err := c.http.Do(req)
 		delay := time.Second << attempt
 		if err == nil {
+			if resp.StatusCode == http.StatusTooManyRequests {
+				delay = retryDelay(resp.Header.Get("Retry-After"), delay)
+				c.mu.Lock()
+				end := time.Now().Add(delay)
+				if end.After(c.cooldown) {
+					c.cooldown = end
+				}
+				c.limited++
+				c.mu.Unlock()
+			}
 			var data []byte
 			// Responses are per page. Bound a malformed or unexpectedly large response.
 			const maxBody = 64 << 20
